@@ -25,7 +25,7 @@ cargo:rerun-if-env-changed=WindowsSDKVersion
 WindowsSDKVersion = None
 cargo:rerun-if-env-changed=LIB
 LIB = None
-PATH = Some(C:\Users\Rafael\Downloads\servicedesk-backend-rust\servicedesk-rust\backend\target\debug;C:\Users\Rafael\Downloads\servicedesk-backend-rust\servicedesk-rust\backend\target\debug\deps;C:\Users\Rafael\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib\rustlib\x86_64-pc-windows-msvc\lib;C:\WINDOWS\system32;C:\WINDOWS;C:\WINDOWS\System32\Wbem;C:\WINDOWS\System32\WindowsPowerShell\v1.0\;C:\Program Files\NVIDIA Corporation\NVIDIA App\NvDLISR;C:\Program Files (x86)\NVIDIA Corporation\PhysX\Common;C:\msys64\ucrt64\bin;C:\Program Files\Go\bin;C:\Program Files\nodejs\;C:\Users\Rafael\.cargo\bin;C:\Users\Rafael\AppData\Local\Microsoft\WindowsApps;C:\Users\Rafael\AppData\Local\Programs\Microsoft VS Code\bin;C:\msys64\ucrt64\bin;C:\Users\Rafael\go\bin;C:\Users\Rafael\AppData\Roaming\npm;C:\Users\Rafael\.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin)
+PATH = Some(C:\Users\PC\Documents\GitHub\Service-desk\backend\target\debug\deps;C:\Users\PC\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib\rustlib\x86_64-pc-windows-msvc\lib;C:\Python314\Scripts\;C:\Python314\;C:\WINDOWS\system32;C:\WINDOWS;C:\WINDOWS\System32\Wbem;C:\WINDOWS\System32\WindowsPowerShell\v1.0\;C:\WINDOWS\System32\OpenSSH\;C:\Program Files\NVIDIA Corporation\NVIDIA App\NvDLISR;C:\Program Files (x86)\NVIDIA Corporation\PhysX\Common;C:\Program Files\dotnet\;C:\Program Files\Git\cmd;C:\Program Files\nodejs\;C:\ProgramData\chocolatey\bin;C:\Users\PC\AppData\Local\Muse Hub\lib;C:\Program Files\Cloudflare\Cloudflare WARP\;C:\Program Files\Go\bin;C:\Users\PC\.cargo\bin;C:\Users\PC\AppData\Local\Microsoft\WindowsApps;D:\Microsoft VS Code\bin;C:\Users\PC\AppData\Local\GitHubDesktop\bin;C:\Users\PC\AppData\Roaming\npm;C:\Users\PC\go\bin;C:\Users\PC\.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin)
 cargo:rerun-if-env-changed=INCLUDE
 INCLUDE = None
 cargo:rerun-if-env-changed=CC_x86_64-pc-windows-msvc
@@ -76,7 +76,7 @@ cargo:rerun-if-env-changed=WindowsSDKVersion
 WindowsSDKVersion = None
 cargo:rerun-if-env-changed=LIB
 LIB = None
-PATH = Some(C:\Users\Rafael\Downloads\servicedesk-backend-rust\servicedesk-rust\backend\target\debug;C:\Users\Rafael\Downloads\servicedesk-backend-rust\servicedesk-rust\backend\target\debug\deps;C:\Users\Rafael\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib\rustlib\x86_64-pc-windows-msvc\lib;C:\WINDOWS\system32;C:\WINDOWS;C:\WINDOWS\System32\Wbem;C:\WINDOWS\System32\WindowsPowerShell\v1.0\;C:\Program Files\NVIDIA Corporation\NVIDIA App\NvDLISR;C:\Program Files (x86)\NVIDIA Corporation\PhysX\Common;C:\msys64\ucrt64\bin;C:\Program Files\Go\bin;C:\Program Files\nodejs\;C:\Users\Rafael\.cargo\bin;C:\Users\Rafael\AppData\Local\Microsoft\WindowsApps;C:\Users\Rafael\AppData\Local\Programs\Microsoft VS Code\bin;C:\msys64\ucrt64\bin;C:\Users\Rafael\go\bin;C:\Users\Rafael\AppData\Roaming\npm;C:\Users\Rafael\.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin)
+PATH = Some(C:\Users\PC\Documents\GitHub\Service-desk\backend\target\debug\deps;C:\Users\PC\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib\rustlib\x86_64-pc-windows-msvc\lib;C:\Python314\Scripts\;C:\Python314\;C:\WINDOWS\system32;C:\WINDOWS;C:\WINDOWS\System32\Wbem;C:\WINDOWS\System32\WindowsPowerShell\v1.0\;C:\WINDOWS\System32\OpenSSH\;C:\Program Files\NVIDIA Corporation\NVIDIA App\NvDLISR;C:\Program Files (x86)\NVIDIA Corporation\PhysX\Common;C:\Program Files\dotnet\;C:\Program Files\Git\cmd;C:\Program Files\nodejs\;C:\ProgramData\chocolatey\bin;C:\Users\PC\AppData\Local\Muse Hub\lib;C:\Program Files\Cloudflare\Cloudflare WARP\;C:\Program Files\Go\bin;C:\Users\PC\.cargo\bin;C:\Users\PC\AppData\Local\Microsoft\WindowsApps;D:\Microsoft VS Code\bin;C:\Users\PC\AppData\Local\GitHubDesktop\bin;C:\Users\PC\AppData\Roaming\npm;C:\Users\PC\go\bin;C:\Users\PC\.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin)
 cargo:rerun-if-env-changed=INCLUDE
 INCLUDE = None
 cargo:rerun-if-env-changed=CC_x86_64-pc-windows-msvc
@@ -99,7 +99,7 @@ cargo:rerun-if-env-changed=CFLAGS_x86_64-pc-windows-msvc
 CFLAGS_x86_64-pc-windows-msvc = None
 constant_time_test.c
 cargo:rustc-link-lib=static=ring_core_0_17_14__test
-cargo:rustc-link-search=native=C:\Users\Rafael\Downloads\servicedesk-backend-rust\servicedesk-rust\backend\target\debug\build\ring-65e4ae8e6293c9ac\out
+cargo:rustc-link-search=native=C:\Users\PC\Documents\GitHub\Service-desk\backend\target\debug\build\ring-65e4ae8e6293c9ac\out
 cargo:rerun-if-changed=crypto\chacha\asm\chacha-armv4.pl
 cargo:rerun-if-changed=crypto\chacha\asm\chacha-armv8.pl
 cargo:rerun-if-changed=crypto\chacha\asm\chacha-x86.pl
