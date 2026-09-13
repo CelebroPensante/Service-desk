@@ -66,10 +66,26 @@ async fn main() {
         .route("/register", post(handlers::auth::register))
         .route("/login", post(handlers::auth::login))
         .merge(rotas_protegidas);
+    
+    let rotas_chamados = Router::new()
+        .route(
+            "/:id/comentarios",   // <- dois-pontos, não chaves
+            get(handlers::comentario::listar_comentarios),
+        )
+        .layer(from_fn_with_state(state.clone(), middleware::require_auth));
+
+    let rotas_chamados = Router::new()
+    .route(
+        "/:id/comentarios",
+        get(handlers::comentario::listar_comentarios)
+            .post(handlers::comentario::criar_comentario),
+    )
+    .layer(from_fn_with_state(state.clone(), middleware::require_auth));
 
     let app = Router::new()
         .route("/health", get(|| async { r#"{"status":"ok"}"# }))
         .nest("/api/auth", rotas_auth)
+        .nest("/api/chamados", rotas_chamados)
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state);
