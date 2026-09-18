@@ -8,7 +8,7 @@ mod models;
 use axum::{
     http::{HeaderValue, Method},
     middleware::from_fn_with_state,
-    routing::{get, post},
+    routing::{get, patch, post},
     Router,
 };
 use sqlx::PgPool;
@@ -66,21 +66,19 @@ async fn main() {
         .route("/register", post(handlers::auth::register))
         .route("/login", post(handlers::auth::login))
         .merge(rotas_protegidas);
-    
-    let rotas_chamados = Router::new()
-        .route(
-            "/:id/comentarios",   // <- dois-pontos, não chaves
-            get(handlers::comentario::listar_comentarios),
-        )
-        .layer(from_fn_with_state(state.clone(), middleware::require_auth));
 
     let rotas_chamados = Router::new()
-    .route(
-        "/:id/comentarios",
-        get(handlers::comentario::listar_comentarios)
-            .post(handlers::comentario::criar_comentario),
-    )
-    .layer(from_fn_with_state(state.clone(), middleware::require_auth));
+        .route(
+            "/:id/comentarios",
+            get(handlers::comentario::listar_comentarios)
+                .post(handlers::comentario::criar_comentario),
+        )
+        .route(
+            "/:id/comentarios/:comentario_id",
+            patch(handlers::comentario::editar_comentario)
+                .delete(handlers::comentario::excluir_comentario),
+        )
+        .layer(from_fn_with_state(state.clone(), middleware::require_auth));
 
     let app = Router::new()
         .route("/health", get(|| async { r#"{"status":"ok"}"# }))
