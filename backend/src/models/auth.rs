@@ -58,3 +58,55 @@ impl ErroResposta {
         Self { erro: mensagem.into() }
     }
 }
+
+// --- Gestão de Cargos e Permissões ---
+
+#[derive(Debug, Serialize)]
+pub struct CargoResumo {
+    pub id: i32,
+    #[serde(rename = "idPermissao")]
+    pub id_permissao: i32,
+    pub cargo: String,
+    pub nivel: i32,
+    pub descricao: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NovoCargoInput {
+    pub cargo: String,
+    #[serde(rename = "idPermissao")]
+    pub id_permissao: i32,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateCargoInput {
+    pub cargo: String,
+    #[serde(rename = "idPermissao")]
+    pub id_permissao: i32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct NivelPermissao {
+    pub id: i32,
+    pub nivel: i32,
+    pub descricao: String,
+}
+
+// --- Gestão de Usuários ---
+
+#[derive(Debug, Serialize)]
+pub struct UsuarioResumo {
+    pub id: i32,
+    pub nome: String,
+    pub email: String,
+    pub cargo: String,
+    #[serde(rename = "idCargo")]
+    pub id_cargo: i32,
+    pub ativo: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AtribuirCargoInput {
+    #[serde(rename = "idCargo")]
+    pub id_cargo: i32,
+}

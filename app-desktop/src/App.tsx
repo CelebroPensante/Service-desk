@@ -2,6 +2,7 @@ import { useState } from 'react'
 import LoginScreen from './LoginScreen'
 import SignupScreen from './SignupScreen'
 import ForgotPasswordScreen from './ForgotPasswordScreen'
+import AdminDashboard from './screens/admin/AdminDashboard'
 import ChamadoDetalhes from './ChamadoDetalhes'
 import type { Usuario } from './types'
 import './App.css'
@@ -14,8 +15,10 @@ function App() {
   const [token, setToken] = useState<string | null>(null)
 
   function handleAutenticado(usuario: Usuario, token: string) {
-    setToken(token)
+    // Em produção, guarde o token de forma mais segura (ex: Tauri Store).
+    console.log('Token JWT recebido:', token)
     setUsuarioLogado(usuario)
+    setToken(token)
     setTela('logado')
   }
 
@@ -49,9 +52,26 @@ function App() {
     )
   }
 
-  if (tela === 'logado' && usuarioLogado) {
+  if (tela === 'chamado' && token && usuarioLogado) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-4">
+      <ChamadoDetalhes
+        idChamado={1}
+        token={token}
+        idUsuarioLogado={usuarioLogado.id}
+        onVoltar={() => setTela('logado')}
+      />
+    )
+  }
+
+  if (tela === 'logado' && usuarioLogado && token) {
+    // Se for ADM (Nível 5), mostra o dashboard administrativo
+    if (usuarioLogado.nivelAcesso >= 5) {
+      return <AdminDashboard usuario={usuarioLogado} token={token} onSair={handleSair} />
+    }
+
+    // Caso contrário, mostra o painel padrão
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-slate-50">
         <h1 className="text-2xl font-semibold text-slate-900">
           Bem-vindo, {usuarioLogado.nome}!
         </h1>

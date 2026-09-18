@@ -7,8 +7,8 @@ mod models;
 
 use axum::{
     http::{HeaderValue, Method},
-    middleware::from_fn_with_state,
-    routing::{get, patch, post},
+    middleware::{from_fn, from_fn_with_state},
+    routing::{get, patch, post, put},
     Router,
 };
 use sqlx::PgPool;
@@ -84,6 +84,17 @@ async fn main() {
         .route("/health", get(|| async { r#"{"status":"ok"}"# }))
         .nest("/api/auth", rotas_auth)
         .nest("/api/chamados", rotas_chamados)
+        .nest(
+            "/api/admin",
+            Router::new()
+                .route("/cargos", get(handlers::cargos::listar_cargos).post(handlers::cargos::criar_cargo))
+                .route("/cargos/:id", put(handlers::cargos::atualizar_cargo).delete(handlers::cargos::deletar_cargo))
+                .route("/cargos/permissoes", get(handlers::cargos::listar_permissoes))
+                .route("/usuarios", get(handlers::usuarios::listar_usuarios))
+                .route("/usuarios/:id/cargo", patch(handlers::usuarios::atribuir_cargo))
+                .layer(from_fn(|req, next| middleware::auth::require_nivel_minimo(5, req, next)))
+                .layer(from_fn_with_state(state.clone(), middleware::require_auth)),
+        )
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state);
