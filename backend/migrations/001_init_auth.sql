@@ -10,7 +10,7 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto"; -- para gen_random_uuid(), se necess�
 -- NivelPermissao: define o grau de acesso (ex.: leitura, escrita,
 -- administração total) que pode ser vinculado a um Cargo.
 -- ------------------------------------------------------------
-CREATE TABLE nivel_permissao (
+CREATE TABLE IF NOT EXISTS nivel_permissao (
     id          SERIAL PRIMARY KEY,
     nivel       INTEGER NOT NULL UNIQUE,          -- ex.: 1=Default, 2=Tecnico, 3=HelpDesk, 4=Gerente, 5=ADM
     descricao   VARCHAR(255) NOT NULL,
@@ -22,7 +22,7 @@ CREATE TABLE nivel_permissao (
 -- Default, Tecnico), conforme Figura 1 — Diagrama de Cargos e
 -- Permissões.
 -- ------------------------------------------------------------
-CREATE TABLE cargo (
+CREATE TABLE IF NOT EXISTS cargo (
     id                SERIAL PRIMARY KEY,
     id_permissao      INTEGER NOT NULL REFERENCES nivel_permissao(id) ON DELETE RESTRICT,
     cargo             VARCHAR(100) NOT NULL UNIQUE,
@@ -33,7 +33,7 @@ CREATE TABLE cargo (
 -- Usuario: entidade central de autenticação. Corresponde à
 -- classe Usuario do Diagrama de Classes.
 -- ------------------------------------------------------------
-CREATE TABLE usuario (
+CREATE TABLE IF NOT EXISTS usuario (
     id                SERIAL PRIMARY KEY,
     id_cargo          INTEGER NOT NULL REFERENCES cargo(id) ON DELETE RESTRICT,
     nome              VARCHAR(255) NOT NULL,
@@ -46,13 +46,13 @@ CREATE TABLE usuario (
     ativo             BOOLEAN NOT NULL DEFAULT TRUE
 );
 
-CREATE INDEX idx_usuario_email ON usuario (email);
+CREATE INDEX IF NOT EXISTS idx_usuario_email ON usuario (email);
 
 -- ------------------------------------------------------------
 -- Atendente: especialização de Usuario para quem desempenha
 -- função técnica (gerencia chamados, inicia acesso remoto).
 -- ------------------------------------------------------------
-CREATE TABLE atendente (
+CREATE TABLE IF NOT EXISTS atendente (
     id                SERIAL PRIMARY KEY,
     id_usuario        INTEGER NOT NULL UNIQUE REFERENCES usuario(id) ON DELETE CASCADE,
     id_supervisor     INTEGER REFERENCES atendente(id) ON DELETE SET NULL,
@@ -67,11 +67,13 @@ INSERT INTO nivel_permissao (nivel, descricao) VALUES
     (2, 'Acesso técnico — atender, atualizar e resolver chamados'),
     (3, 'Acesso help desk — triagem e distribuição de chamados'),
     (4, 'Acesso gerencial — relatórios e supervisão de equipe'),
-    (5, 'Acesso administrativo total — gestão de cargos e permissões');
+    (5, 'Acesso administrativo total — gestão de cargos e permissões')
+ON CONFLICT (nivel) DO NOTHING;
 
 INSERT INTO cargo (id_permissao, cargo) VALUES
     (1, 'Default'),
     (2, 'Tecnico'),
     (3, 'Help Desk'),
     (4, 'Gerente'),
-    (5, 'ADM');
+    (5, 'ADM')
+ON CONFLICT (cargo) DO NOTHING;

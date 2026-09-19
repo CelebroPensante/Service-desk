@@ -37,3 +37,12 @@ export interface UsuarioResumo {
   idCargo: number
   ativo: boolean
 }
+
+export interface MensagemChat {
+  id: number
+  idChamado: number
+  idUsuario: number
+  texto: string
+  dataEnvio: string
+  nomeUsuario?: string // ainda não vem do backend, ver pendências
+}

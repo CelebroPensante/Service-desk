@@ -1,25 +1,25 @@
 -- Add migration script here
 -- Tabelas de apoio (domínio de Chamados)
-CREATE TABLE categoria (
+CREATE TABLE IF NOT EXISTS categoria (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     categoria varchar(100) NOT NULL,
     descricao varchar(512)
 );
 
-CREATE TABLE prioridade (
+CREATE TABLE IF NOT EXISTS prioridade (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     nivel integer NOT NULL,
     prioridade varchar(100) NOT NULL
 );
 
-CREATE TABLE status (
+CREATE TABLE IF NOT EXISTS status (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     status varchar(100) NOT NULL,
     ativo boolean NOT NULL DEFAULT true
 );
 
 -- Chamados (simplificado: sem atendente/proprietário por enquanto)
-CREATE TABLE chamados (
+CREATE TABLE IF NOT EXISTS chamados (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     id_usuario integer NOT NULL REFERENCES usuario (id),
     id_categoria integer NOT NULL REFERENCES categoria (id),
@@ -36,7 +36,7 @@ CREATE TABLE chamados (
 );
 
 -- Comentário (US-10)
-CREATE TABLE comentario (
+CREATE TABLE IF NOT EXISTS comentario (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     id_chamado integer NOT NULL REFERENCES chamados (id),
     id_usuario integer NOT NULL REFERENCES usuario (id),

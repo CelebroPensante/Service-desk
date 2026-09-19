@@ -18,11 +18,15 @@ use tower_http::trace::TraceLayer;
 use auth::TokenManager;
 use config::Config;
 
+use std::{collections::HashMap, sync::{Arc, Mutex}};
+use tokio::sync::broadcast;
+
 /// Estado compartilhado entre todos os handlers: pool de conexões e gerador de tokens.
 #[derive(Clone)]
 pub struct AppState {
     pub db: PgPool,
     pub token_manager: TokenManager,
+    pub chat_rooms: Arc<Mutex<HashMap<i32, broadcast::Sender<String>>>>,
 }
 
 #[tokio::main]
@@ -45,6 +49,7 @@ async fn main() {
     let state = AppState {
         db: pool,
         token_manager: TokenManager::new(cfg.jwt_secret.clone(), cfg.access_token_ttl),
+        chat_rooms: Arc::new(Mutex::new(HashMap::new())),
     };
 
     let cors = CorsLayer::new()
@@ -78,7 +83,9 @@ async fn main() {
             patch(handlers::comentario::editar_comentario)
                 .delete(handlers::comentario::excluir_comentario),
         )
-        .layer(from_fn_with_state(state.clone(), middleware::require_auth));
+        .route("/:id/chat/mensagens", get(handlers::chat::listar_mensagens))
+        .layer(from_fn_with_state(state.clone(), middleware::require_auth))
+        .route("/:id/chat/ws", get(handlers::chat::chat_ws));
 
     let app = Router::new()
         .route("/health", get(|| async { r#"{"status":"ok"}"# }))
@@ -92,7 +99,7 @@ async fn main() {
                 .route("/cargos/permissoes", get(handlers::cargos::listar_permissoes))
                 .route("/usuarios", get(handlers::usuarios::listar_usuarios))
                 .route("/usuarios/:id/cargo", patch(handlers::usuarios::atribuir_cargo))
-                .layer(from_fn(|req, next| middleware::auth::require_nivel_minimo(5, req, next)))
+                .layer(from_fn(|req, next| middleware::require_nivel_minimo(5, req, next)))
                 .layer(from_fn_with_state(state.clone(), middleware::require_auth)),
         )
         .layer(cors)

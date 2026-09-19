@@ -1,4 +1,5 @@
 import Comentarios from './Comentarios'
+import Chat from './Chat'
 
 // ChamadoDetalhes.tsx
 interface ChamadoDetalhesProps {
@@ -24,6 +25,8 @@ function ChamadoDetalhes({ idChamado, token, idUsuarioLogado, onVoltar }: Chamad
         </div>
 
         <Comentarios idChamado={idChamado} token={token} idUsuarioLogado={idUsuarioLogado} />
+
+        <Chat idChamado={idChamado} token={token} idUsuarioLogado={idUsuarioLogado} />
       </div>
     </div>
   )
