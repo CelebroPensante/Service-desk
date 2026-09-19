@@ -1,0 +1,6 @@
+-- Add migration script here
+ALTER TABLE comentario 
+    ADD COLUMN IF NOT EXISTS editado_em TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS excluido BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS excluido_em TIMESTAMP; 
+
