@@ -91,9 +91,9 @@ INSERT INTO categoria (categoria, descricao) VALUES
 
 INSERT INTO prioridade (nivel, prioridade) VALUES
     (1, 'Baixa'),
-    (2, 'Média'),
+    (2, U&'M\00E9dia'),
     (3, 'Alta'),
-    (4, 'Crítica');
+    (4, U&'Cr\00EDtica');
 
 INSERT INTO status_chamado (status) VALUES
     ('Aberto'),

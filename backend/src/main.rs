@@ -8,7 +8,7 @@ mod models;
 use axum::{
     http::{HeaderValue, Method},
     middleware::{from_fn, from_fn_with_state},
-    routing::{delete, get, patch, post, put},
+    routing::{get, patch, post, put},
     Router,
 };
 use sqlx::PgPool;
@@ -84,6 +84,8 @@ async fn main() {
         .route("/categorias", get(handlers::chamados::listar_categorias))
         .route("/prioridades", get(handlers::chamados::listar_prioridades))
         .route("/status", get(handlers::chamados::listar_status))
+        .route("/:id/status", put(handlers::chamados::atualizar_status))
+        .route("/:id/atendente", put(handlers::chamados::atualizar_atendente))
         .route(
             "/:id",
             get(handlers::chamados::consultar_chamado)
@@ -96,6 +98,11 @@ async fn main() {
         .route("/health", get(|| async { r#"{"status":"ok"}"# }))
         .nest("/api/auth", rotas_auth)
         .nest("/api/chamados", rotas_chamados)
+        .route(
+            "/api/tecnicos",
+            get(handlers::chamados::listar_tecnicos)
+                .layer(from_fn_with_state(state.clone(), middleware::require_auth)),
+        )
         .nest(
             "/api/admin",
             Router::new()

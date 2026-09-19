@@ -2,7 +2,6 @@ import { useState } from "react";
 import LoginScreen from "./LoginScreen";
 import SignupScreen from "./SignupScreen";
 import ForgotPasswordScreen from "./ForgotPasswordScreen";
-import AdminDashboard from "./screens/admin/AdminDashboard";
 import ChamadosScreen from "./screens/ChamadosScreen";
 import type { Usuario } from "./types";
 import "./App.css";
@@ -16,7 +15,6 @@ function App() {
 
   function handleAutenticado(usuario: Usuario, tokenJwt: string) {
     // Em produção, guarde o token de forma mais segura (ex: Tauri Store).
-    console.log("Token JWT recebido:", tokenJwt);
     setUsuarioLogado(usuario);
     setToken(tokenJwt);
     setTela("logado");
@@ -42,18 +40,8 @@ function App() {
   }
 
   if (tela === "logado" && usuarioLogado && token) {
-    // Se for ADM (Nível 5), mostra o dashboard administrativo
-    if (usuarioLogado.nivelAcesso >= 5) {
-      return (
-        <AdminDashboard
-          usuario={usuarioLogado}
-          token={token}
-          onSair={handleSair}
-        />
-      );
-    }
-
-    // agora o chamado esta implementado
+    // Todos os níveis usam o mesmo layout. O menu lateral mostra o Painel Técnico
+    // (nível 2+) e a Gestão de Usuários/Cargos (nível 5) conforme o nível de acesso.
     return (
       <ChamadosScreen
         usuario={usuarioLogado}

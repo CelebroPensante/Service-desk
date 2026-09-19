@@ -199,3 +199,21 @@ pub struct StatusChamadoResumo {
     pub id: i32,
     pub status: String,
 }
+
+#[derive(Debug, Serialize)]
+pub struct TecnicoResumo {
+    pub id: i32,
+    pub nome: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AtualizarStatusChamadoInput {
+    #[serde(rename = "idStatus")]
+    pub id_status: i32,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AtribuirAtendenteInput {
+    #[serde(rename = "idAtendente")]
+    pub id_atendente: Option<i32>,
+}

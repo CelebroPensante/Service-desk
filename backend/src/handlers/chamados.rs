@@ -10,8 +10,9 @@ use sqlx::Row;
 use crate::{
     auth::Claims,
     models::{
-        AtualizarChamadoInput, CategoriaResumo, Chamado, ErroResposta, NovoChamadoInput,
-        PrioridadeResumo, StatusChamadoResumo,
+        AtribuirAtendenteInput, AtualizarChamadoInput, AtualizarStatusChamadoInput,
+        CategoriaResumo, Chamado, ErroResposta, NovoChamadoInput, PrioridadeResumo,
+        StatusChamadoResumo, TecnicoResumo,
     },
     AppState,
 };
@@ -538,4 +539,133 @@ pub async fn listar_status(State(state): State<AppState>) -> Response {
         .collect();
 
     (StatusCode::OK, Json(status)).into_response()
+}
+
+/// GET /api/tecnicos
+pub async fn listar_tecnicos(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+) -> Response {
+    if claims.nivel_acesso < 2 {
+        return erro(StatusCode::FORBIDDEN, "você não tem permissão para listar técnicos");
+    }
+
+    let resultado = sqlx::query(
+        r#"
+        SELECT a.id, u.nome
+        FROM atendente a
+        JOIN usuario u ON u.id = a.id_usuario
+        WHERE a.ativo = TRUE AND u.ativo = TRUE
+        ORDER BY u.nome
+        "#,
+    )
+    .fetch_all(&state.db)
+    .await;
+
+    match resultado {
+        Ok(linhas) => {
+            let tecnicos: Vec<TecnicoResumo> = linhas
+                .into_iter()
+                .map(|linha| TecnicoResumo {
+                    id: linha.get("id"),
+                    nome: linha.get("nome"),
+                })
+                .collect();
+            (StatusCode::OK, Json(tecnicos)).into_response()
+        }
+        Err(e) => {
+            tracing::error!("erro ao listar técnicos: {e}");
+            erro(StatusCode::INTERNAL_SERVER_ERROR, "erro ao listar técnicos")
+        }
+    }
+}
+
+/// PUT /api/chamados/:id/status
+pub async fn atualizar_status(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(id): Path<i32>,
+    Json(input): Json<AtualizarStatusChamadoInput>,
+) -> Response {
+    if claims.nivel_acesso < 2 {
+        return erro(StatusCode::FORBIDDEN, "você não tem permissão para atualizar o status");
+    }
+
+    let resultado = sqlx::query(
+        r#"
+        UPDATE chamado
+        SET id_status = $1, data_atualizacao = NOW()
+        WHERE id = $2
+        "#,
+    )
+    .bind(input.id_status)
+    .bind(id)
+    .execute(&state.db)
+    .await;
+
+    match resultado {
+        Ok(resultado) if resultado.rows_affected() > 0 => {}
+        Ok(_) => return erro(StatusCode::NOT_FOUND, "chamado não encontrado"),
+        Err(sqlx::Error::Database(e)) if e.code().as_deref() == Some("23503") => {
+            return erro(StatusCode::BAD_REQUEST, "status inválido");
+        }
+        Err(e) => {
+            tracing::error!("erro ao atualizar status do chamado: {e}");
+            return erro(StatusCode::INTERNAL_SERVER_ERROR, "erro ao atualizar status");
+        }
+    }
+
+    match buscar_chamado(&state, id).await {
+        Ok(Some(chamado)) => (StatusCode::OK, Json(chamado)).into_response(),
+        Ok(None) => erro(StatusCode::NOT_FOUND, "chamado não encontrado"),
+        Err(e) => {
+            tracing::error!("erro ao carregar chamado atualizado: {e}");
+            erro(StatusCode::INTERNAL_SERVER_ERROR, "erro ao carregar chamado")
+        }
+    }
+}
+
+/// PUT /api/chamados/:id/atendente
+pub async fn atualizar_atendente(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(id): Path<i32>,
+    Json(input): Json<AtribuirAtendenteInput>,
+) -> Response {
+    if claims.nivel_acesso < 2 {
+        return erro(StatusCode::FORBIDDEN, "você não tem permissão para atribuir técnicos");
+    }
+
+    let resultado = sqlx::query(
+        r#"
+        UPDATE chamado
+        SET id_atendente = $1, data_atualizacao = NOW()
+        WHERE id = $2
+        "#,
+    )
+    .bind(input.id_atendente)
+    .bind(id)
+    .execute(&state.db)
+    .await;
+
+    match resultado {
+        Ok(resultado) if resultado.rows_affected() > 0 => {}
+        Ok(_) => return erro(StatusCode::NOT_FOUND, "chamado não encontrado"),
+        Err(sqlx::Error::Database(e)) if e.code().as_deref() == Some("23503") => {
+            return erro(StatusCode::BAD_REQUEST, "técnico inválido");
+        }
+        Err(e) => {
+            tracing::error!("erro ao atribuir técnico: {e}");
+            return erro(StatusCode::INTERNAL_SERVER_ERROR, "erro ao atribuir técnico");
+        }
+    }
+
+    match buscar_chamado(&state, id).await {
+        Ok(Some(chamado)) => (StatusCode::OK, Json(chamado)).into_response(),
+        Ok(None) => erro(StatusCode::NOT_FOUND, "chamado não encontrado"),
+        Err(e) => {
+            tracing::error!("erro ao carregar chamado atualizado: {e}");
+            erro(StatusCode::INTERNAL_SERVER_ERROR, "erro ao carregar chamado")
+        }
+    }
 }
