@@ -55,7 +55,9 @@ pub struct ErroResposta {
 
 impl ErroResposta {
     pub fn new(mensagem: impl Into<String>) -> Self {
-        Self { erro: mensagem.into() }
+        Self {
+            erro: mensagem.into(),
+        }
     }
 }
 
@@ -109,4 +111,109 @@ pub struct UsuarioResumo {
 pub struct AtribuirCargoInput {
     #[serde(rename = "idCargo")]
     pub id_cargo: i32,
+}
+
+// --- Gestão de Chamados ---
+
+#[derive(Debug, Serialize)]
+pub struct Chamado {
+    pub id: i32,
+
+    #[serde(rename = "idUsuario")]
+    pub id_usuario: i32,
+
+    #[serde(rename = "idAtendente")]
+    pub id_atendente: Option<i32>,
+
+    #[serde(rename = "idCategoria")]
+    pub id_categoria: i32,
+
+    #[serde(rename = "idPrioridade")]
+    pub id_prioridade: i32,
+
+    #[serde(rename = "idStatus")]
+    pub id_status: i32,
+
+    pub titulo: String,
+
+    #[serde(rename = "descricaoDetalhada")]
+    pub descricao_detalhada: String,
+
+    pub categoria: String,
+    pub prioridade: String,
+    pub status: String,
+
+    #[serde(rename = "dataAbertura")]
+    pub data_abertura: NaiveDateTime,
+
+    #[serde(rename = "dataResolucao")]
+    pub data_resolucao: Option<NaiveDateTime>,
+
+    #[serde(rename = "dataAtualizacao")]
+    pub data_atualizacao: NaiveDateTime,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NovoChamadoInput {
+    pub titulo: String,
+
+    #[serde(rename = "descricaoDetalhada")]
+    pub descricao_detalhada: String,
+
+    #[serde(rename = "idCategoria")]
+    pub id_categoria: i32,
+
+    #[serde(rename = "idPrioridade")]
+    pub id_prioridade: i32,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AtualizarChamadoInput {
+    pub titulo: String,
+
+    #[serde(rename = "descricaoDetalhada")]
+    pub descricao_detalhada: String,
+
+    #[serde(rename = "idCategoria")]
+    pub id_categoria: i32,
+
+    #[serde(rename = "idPrioridade")]
+    pub id_prioridade: i32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CategoriaResumo {
+    pub id: i32,
+    pub categoria: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PrioridadeResumo {
+    pub id: i32,
+    pub nivel: i32,
+    pub prioridade: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct StatusChamadoResumo {
+    pub id: i32,
+    pub status: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TecnicoResumo {
+    pub id: i32,
+    pub nome: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AtualizarStatusChamadoInput {
+    #[serde(rename = "idStatus")]
+    pub id_status: i32,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AtribuirAtendenteInput {
+    #[serde(rename = "idAtendente")]
+    pub id_atendente: Option<i32>,
 }

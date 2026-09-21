@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type SubmitEvent } from 'react'
 import { Send } from 'lucide-react'
-import { formatarDataUtc } from './utils/data'
-import type { MensagemChat } from './types'
+import { formatarDataUtc } from '../../utils/data'
+import type { MensagemChat } from '../../types'
 
 const API_URL = 'http://localhost:8080'
 const WS_URL = API_URL.replace(/^http/, 'ws')

@@ -21,9 +21,12 @@ o frontend não precisa de nenhuma alteração.
    createdb servicedesk
    ```
 
-2. Aplique a migration inicial (idêntica à versão em Go):
+2. Aplique as migrations na ordem (a segunda cria as tabelas e os dados
+  iniciais de categorias, prioridades e status dos chamados):
    ```bash
    psql -d servicedesk -f migrations/001_init_auth.sql
+  psql -d servicedesk -f migrations/002_init_chamados.sql
+  psql -d servicedesk -f migrations/003_seed_atendentes.sql
    ```
 
 3. Copie o arquivo de ambiente e ajuste os valores (principalmente `JWT_SECRET`):

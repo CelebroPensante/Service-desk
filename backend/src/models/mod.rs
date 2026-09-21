@@ -5,7 +5,11 @@ pub mod chat;
 pub use auth::{
     Usuario, RegisterInput, LoginInput, AuthResponse, ErroResposta,
     CargoResumo, NovoCargoInput, UpdateCargoInput, NivelPermissao,
-    UsuarioResumo, AtribuirCargoInput,};
+    UsuarioResumo, AtribuirCargoInput,
+    Chamado, NovoChamadoInput, AtualizarChamadoInput, AtualizarStatusChamadoInput,
+    AtribuirAtendenteInput, CategoriaResumo, PrioridadeResumo, StatusChamadoResumo,
+    TecnicoResumo,
+};
 pub use comentario::Comentario;
 pub use chat::MensagemChat;
 // pub use anexo::Anexo;
