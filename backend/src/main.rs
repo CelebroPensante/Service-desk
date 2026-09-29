@@ -6,9 +6,10 @@ mod middleware;
 mod models;
 
 use axum::{
+    extract::DefaultBodyLimit,
     http::{HeaderValue, Method},
     middleware::{from_fn, from_fn_with_state},
-    routing::{get, patch, post, put},
+    routing::{delete, get, patch, post, put},
     Router,
 };
 use sqlx::PgPool;
@@ -27,6 +28,7 @@ pub struct AppState {
     pub db: PgPool,
     pub token_manager: TokenManager,
     pub chat_rooms: Arc<Mutex<HashMap<i32, broadcast::Sender<String>>>>,
+    pub config: Config,
 }
 
 #[tokio::main]
@@ -50,6 +52,7 @@ async fn main() {
         db: pool,
         token_manager: TokenManager::new(cfg.jwt_secret.clone(), cfg.access_token_ttl),
         chat_rooms: Arc::new(Mutex::new(HashMap::new())),
+        config: cfg.clone(),
     };
 
     let cors = CorsLayer::new()
@@ -111,6 +114,21 @@ async fn main() {
         )
         // --- Chat (US-10) ---
         .route("/:id/chat/mensagens", get(handlers::chat::listar_mensagens))
+        // --- Anexos (US-11) ---
+        .route(
+            "/:id/anexos",
+            get(handlers::anexo::listar_anexos)
+                .post(handlers::anexo::upload_anexo)
+                .route_layer(DefaultBodyLimit::max((cfg.max_anexo_mb * 1024 * 1024) as usize)),
+        )
+        .route(
+            "/:id/anexos/:id_anexo",
+            delete(handlers::anexo::excluir_anexo),
+        )
+        .route(
+            "/:id/anexos/:id_anexo/download",
+            get(handlers::anexo::download_anexo),
+        )
         .layer(from_fn_with_state(state.clone(), middleware::require_auth))
         // Fora do middleware acima DE PROPÓSITO: o handshake de WebSocket não
         // permite header Authorization; o token é validado manualmente dentro

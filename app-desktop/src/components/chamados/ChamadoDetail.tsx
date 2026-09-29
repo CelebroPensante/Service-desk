@@ -1,6 +1,7 @@
 import type { Chamado } from "../../types";
 import Comentarios from "./Comentarios";
 import Chat from "./Chat";
+import Anexos from "./Anexos";
 
 interface ChamadoDetailProps {
   chamado: Chamado;
@@ -51,12 +52,16 @@ export default function ChamadoDetail({
         </div>
 
         <div className="mt-8 space-y-6">
+          <Anexos idChamado={chamado.id} token={token} idUsuarioLogado={idUsuarioLogado} />
           <Comentarios
             idChamado={chamado.id}
             token={token}
             idUsuarioLogado={idUsuarioLogado}
           />
-          <Chat idChamado={chamado.id} token={token} />
+          <Chat 
+            idChamado={chamado.id} 
+            token={token}
+            idUsuarioLogado={idUsuarioLogado} />
         </div>
       </div>
     </div>

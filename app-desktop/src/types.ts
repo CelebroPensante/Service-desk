@@ -44,3 +44,14 @@ export interface MensagemChat {
   dataEnvio: string
   nomeUsuario?: string
 }
+
+export interface Anexo {
+  id: number
+  idChamado: number
+  idUsuario: number
+  nomeUsuario: string
+  nomeOriginal: string
+  tamanhoBytes: number
+  tipoMime: string
+  dataUpload: string
+}
