@@ -6,9 +6,10 @@ mod middleware;
 mod models;
 
 use axum::{
+    extract::DefaultBodyLimit,
     http::{HeaderValue, Method},
     middleware::{from_fn, from_fn_with_state},
-    routing::{get, patch, post, put},
+    routing::{delete, get, patch, post, put},
     Router,
 };
 use sqlx::PgPool;
@@ -27,6 +28,7 @@ pub struct AppState {
     pub db: PgPool,
     pub token_manager: TokenManager,
     pub chat_rooms: Arc<Mutex<HashMap<i32, broadcast::Sender<String>>>>,
+    pub config: Config,
 }
 
 #[tokio::main]
@@ -50,6 +52,7 @@ async fn main() {
         db: pool,
         token_manager: TokenManager::new(cfg.jwt_secret.clone(), cfg.access_token_ttl),
         chat_rooms: Arc::new(Mutex::new(HashMap::new())),
+        config: cfg.clone(),
     };
 
     let cors = CorsLayer::new()
@@ -58,8 +61,17 @@ async fn main() {
                 .parse::<HeaderValue>()
                 .expect("ALLOWED_ORIGIN inválida"),
         )
-        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::PATCH, Method::DELETE])
-        .allow_headers([axum::http::header::CONTENT_TYPE, axum::http::header::AUTHORIZATION])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+        ])
+        .allow_headers([
+            axum::http::header::CONTENT_TYPE,
+            axum::http::header::AUTHORIZATION,
+        ])
         .allow_credentials(true);
 
     // Rotas protegidas: exigem Bearer token válido via middleware require_auth.
@@ -73,6 +85,23 @@ async fn main() {
         .merge(rotas_protegidas);
 
     let rotas_chamados = Router::new()
+        // --- CRUD de chamados (feature/crud-chamado) ---
+        .route(
+            "/",
+            get(handlers::chamados::listar_chamados).post(handlers::chamados::criar_chamado),
+        )
+        .route("/categorias", get(handlers::chamados::listar_categorias))
+        .route("/prioridades", get(handlers::chamados::listar_prioridades))
+        .route("/status", get(handlers::chamados::listar_status))
+        .route("/:id/status", put(handlers::chamados::atualizar_status))
+        .route("/:id/atendente", put(handlers::chamados::atualizar_atendente))
+        .route(
+            "/:id",
+            get(handlers::chamados::consultar_chamado)
+                .put(handlers::chamados::atualizar_chamado)
+                .delete(handlers::chamados::deletar_chamado),
+        )
+        // --- Comentários (US-10) ---
         .route(
             "/:id/comentarios",
             get(handlers::comentario::listar_comentarios)
@@ -83,23 +112,61 @@ async fn main() {
             patch(handlers::comentario::editar_comentario)
                 .delete(handlers::comentario::excluir_comentario),
         )
+        // --- Chat (US-10) ---
         .route("/:id/chat/mensagens", get(handlers::chat::listar_mensagens))
+        // --- Anexos (US-11) ---
+        .route(
+            "/:id/anexos",
+            get(handlers::anexo::listar_anexos)
+                .post(handlers::anexo::upload_anexo)
+                .route_layer(DefaultBodyLimit::max((cfg.max_anexo_mb * 1024 * 1024) as usize)),
+        )
+        .route(
+            "/:id/anexos/:id_anexo",
+            delete(handlers::anexo::excluir_anexo),
+        )
+        .route(
+            "/:id/anexos/:id_anexo/download",
+            get(handlers::anexo::download_anexo),
+        )
         .layer(from_fn_with_state(state.clone(), middleware::require_auth))
+        // Fora do middleware acima DE PROPÓSITO: o handshake de WebSocket não
+        // permite header Authorization; o token é validado manualmente dentro
+        // do próprio handler chat_ws.
         .route("/:id/chat/ws", get(handlers::chat::chat_ws));
 
     let app = Router::new()
         .route("/health", get(|| async { r#"{"status":"ok"}"# }))
         .nest("/api/auth", rotas_auth)
         .nest("/api/chamados", rotas_chamados)
+        .route(
+            "/api/tecnicos",
+            get(handlers::chamados::listar_tecnicos)
+                .layer(from_fn_with_state(state.clone(), middleware::require_auth)),
+        )
         .nest(
             "/api/admin",
             Router::new()
-                .route("/cargos", get(handlers::cargos::listar_cargos).post(handlers::cargos::criar_cargo))
-                .route("/cargos/:id", put(handlers::cargos::atualizar_cargo).delete(handlers::cargos::deletar_cargo))
-                .route("/cargos/permissoes", get(handlers::cargos::listar_permissoes))
+                .route(
+                    "/cargos",
+                    get(handlers::cargos::listar_cargos).post(handlers::cargos::criar_cargo),
+                )
+                .route(
+                    "/cargos/:id",
+                    put(handlers::cargos::atualizar_cargo).delete(handlers::cargos::deletar_cargo),
+                )
+                .route(
+                    "/cargos/permissoes",
+                    get(handlers::cargos::listar_permissoes),
+                )
                 .route("/usuarios", get(handlers::usuarios::listar_usuarios))
-                .route("/usuarios/:id/cargo", patch(handlers::usuarios::atribuir_cargo))
-                .layer(from_fn(|req, next| middleware::require_nivel_minimo(5, req, next)))
+                .route(
+                    "/usuarios/:id/cargo",
+                    patch(handlers::usuarios::atribuir_cargo),
+                )
+                .layer(from_fn(|req, next| {
+                    middleware::auth::require_nivel_minimo(5, req, next)
+                }))
                 .layer(from_fn_with_state(state.clone(), middleware::require_auth)),
         )
         .layer(cors)

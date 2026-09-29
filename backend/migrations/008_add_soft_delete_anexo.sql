@@ -1,0 +1,4 @@
+-- Add migration script here
+ALTER TABLE anexo
+    ADD COLUMN IF NOT EXISTS excluido BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS excluido_em TIMESTAMP;

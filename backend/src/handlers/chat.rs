@@ -43,7 +43,7 @@ pub async fn chat_ws(
 
     // Recusa o upgrade se o chamado não existe.
     let existe = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM chamados WHERE id = $1)",
+        "SELECT EXISTS(SELECT 1 FROM chamado WHERE id = $1)",
     )
     .bind(id_chamado)
     .fetch_one(&state.db)

@@ -9,6 +9,8 @@ pub struct Config {
     pub jwt_secret: String,
     pub access_token_ttl: Duration,
     pub allowed_origin: String,
+    pub max_anexo_mb: u64,
+    pub upload_dir: String,
 }
 
 impl Config {
@@ -33,6 +35,11 @@ impl Config {
             access_token_ttl: Duration::from_secs(15 * 60),
             allowed_origin: env::var("ALLOWED_ORIGIN")
                 .unwrap_or_else(|_| "http://localhost:5173".to_string()),
+            max_anexo_mb: env::var("MAX_ANEXO_MB")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(10),
+            upload_dir: env::var("UPLOAD_DIR").unwrap_or_else(|_| "uploads".to_string()),
         }
     }
 }
