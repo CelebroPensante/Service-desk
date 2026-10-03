@@ -12,10 +12,11 @@ import ChamadoForm, {
 import ChamadosList from "../components/chamados/ChamadosList";
 import AppLayout, { type Pagina } from "../components/layout/AppLayout";
 import DashboardView from "../components/dashboard/DashboardView";
-import PageContainer from "../components/layout/PageContainer";
 import TecnicoPanel from "../components/tecnico/TecnicoPanel";
-import UsersManager from "./admin/UsersManager";
-import RolesManager from "./admin/RolesManager";
+import GestaoUsuarios from "../components/adminn/GestaoUsuarios";
+import CargosPermissoes from "../components/adminn/CargosPermissoes";
+import TriagemPanel from "../components/triagem/TriagemPanel";
+import RelatoriosPanel from "../components/relatorios/RelatoriosPanel";
 
 const API_URL = "http://localhost:8080";
 // NOVO: "dashboard" é a tela inicial agora
@@ -26,6 +27,8 @@ type Modo =
   | "detalhe"
   | "editar"
   | "tecnico"
+  | "triagem"
+  | "relatorios"
   | "usuarios"
   | "cargos";
 
@@ -76,7 +79,10 @@ function ChamadosScreen({ usuario, token, onSair }: ChamadosScreenProps) {
         const data = await response.json().catch(() => null);
         throw new Error(data?.erro ?? `Erro na requisição (${response.status})`);
       }
-      return response.json() as Promise<T>;
+      // Respostas sem corpo (ex: DELETE com 204) não quebram mais o JSON.parse
+      if (response.status === 204) return undefined as T;
+      const texto = await response.text();
+      return (texto ? JSON.parse(texto) : undefined) as T;
     },
     [token],
   );
@@ -135,12 +141,12 @@ function ChamadosScreen({ usuario, token, onSair }: ChamadosScreenProps) {
     setSelecionado(null);
     if (pagina === "novo") abrirNovo();
     else if (pagina === "chamados") setModo("lista");
-    else setModo(pagina); // dashboard, tecnico, usuarios, cargos
+    else setModo(pagina);
   }
 
   // Qual item da sidebar fica destacado
   const paginaAtiva: Pagina =
-    modo === "dashboard" || modo === "tecnico" || modo === "usuarios" || modo === "cargos"
+    modo === "dashboard" || modo === "tecnico" || modo === "triagem" || modo === "relatorios" || modo === "usuarios" || modo === "cargos"
       ? modo
       : modo === "novo"
         ? "novo"
@@ -247,26 +253,27 @@ function ChamadosScreen({ usuario, token, onSair }: ChamadosScreenProps) {
     );
   }
 
-  if (modo === "usuarios" && usuario.nivelAcesso >= 5) {
+  if (modo === "triagem" && usuario.nivelAcesso >= 3) {
     return comLayout(
-      <PageContainer
-        titulo="Gestão de Usuários"
-        subtitulo="Atribua cargos e gerencie o acesso dos usuários do sistema."
-      >
-        <UsersManager token={token} />
-      </PageContainer>,
+      <TriagemPanel
+        chamados={chamados}
+        request={request}
+        onRecarregar={carregarChamados}
+        onDetalhe={(id) => void abrirDetalhe(id)}
+      />,
     );
   }
 
+  if (modo === "relatorios" && usuario.nivelAcesso >= 4) {
+    return comLayout(<RelatoriosPanel chamados={chamados} request={request} />);
+  }
+
+  if (modo === "usuarios" && usuario.nivelAcesso >= 5) {
+    return comLayout(<GestaoUsuarios request={request} />);
+  }
+
   if (modo === "cargos" && usuario.nivelAcesso >= 5) {
-    return comLayout(
-      <PageContainer
-        titulo="Gestão de Cargos"
-        subtitulo="Crie e configure os papéis de acesso e permissões."
-      >
-        <RolesManager token={token} />
-      </PageContainer>,
-    );
+    return comLayout(<CargosPermissoes request={request} />);
   }
 
   if (modo === "dashboard") {
