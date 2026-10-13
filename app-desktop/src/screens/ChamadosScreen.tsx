@@ -10,6 +10,7 @@ import ChamadoForm, {
   type ChamadoFormData,
 } from "../components/chamados/ChamadoForm";
 import ChamadosList from "../components/chamados/ChamadosList";
+import TriagemFluxo from "../components/chamados/TriagemFluxo";
 import AppLayout, { type Pagina } from "../components/layout/AppLayout";
 import DashboardView from "../components/dashboard/DashboardView";
 import TecnicoPanel from "../components/tecnico/TecnicoPanel";
@@ -63,6 +64,8 @@ function ChamadosScreen({ usuario, token, onSair }: ChamadosScreenProps) {
   const [form, setForm] = useState<ChamadoFormData>(FORM_VAZIO);
   const [loading, setLoading] = useState(true);
   const [salvando, setSalvando] = useState(false);
+  // US-21: a abertura de um chamado novo começa pela triagem guiada
+  const [triagemAtiva, setTriagemAtiva] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   // NOVO: erros de carga (categorias, prioridades, chamados), separados do erro de ações
   const [erroDados, setErroDados] = useState<string | null>(null);
@@ -132,6 +135,7 @@ function ChamadosScreen({ usuario, token, onSair }: ChamadosScreenProps) {
     setSelecionado(null);
     setForm(FORM_VAZIO);
     setErro(null);
+    setTriagemAtiva(true);
     setModo("novo");
   }
 
@@ -284,6 +288,23 @@ function ChamadosScreen({ usuario, token, onSair }: ChamadosScreenProps) {
         onNovo={abrirNovo}
         onVerTodos={() => setModo("lista")}
         onDetalhe={(id) => void abrirDetalhe(id)}
+      />,
+    );
+  }
+
+  if (modo === "novo" && triagemAtiva) {
+    return comLayout(
+      <TriagemFluxo
+        request={request}
+        onAbrirChamado={() => setTriagemAtiva(false)}
+        onResolvido={() => {
+          setTriagemAtiva(false);
+          setModo("dashboard");
+        }}
+        onCancelar={() => {
+          setTriagemAtiva(false);
+          setModo("lista");
+        }}
       />,
     );
   }

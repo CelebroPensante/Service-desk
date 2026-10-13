@@ -135,10 +135,20 @@ async fn main() {
         // do próprio handler chat_ws.
         .route("/:id/chat/ws", get(handlers::chat::chat_ws));
 
+        // Triagem por árvore de decisão (US-20): exige usuário autenticado; cada
+        // triagem só é acessível pelo próprio dono.
+        let rotas_triagem = Router::new()
+            .route("/iniciar", post(handlers::triagem::iniciar_triagem))
+            .route("/:id", get(handlers::triagem::consultar_triagem))
+            .route("/:id/responder", post(handlers::triagem::responder_triagem))
+            .route("/:id/resolver", post(handlers::triagem::resolver_triagem))
+            .layer(from_fn_with_state(state.clone(), middleware::require_auth));
+
     let app = Router::new()
         .route("/health", get(|| async { r#"{"status":"ok"}"# }))
         .nest("/api/auth", rotas_auth)
         .nest("/api/chamados", rotas_chamados)
+        .nest("/api/triagem", rotas_triagem)
         .route(
             "/api/tecnicos",
             get(handlers::chamados::listar_tecnicos)
