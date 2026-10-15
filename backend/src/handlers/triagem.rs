@@ -4,7 +4,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 
 use crate::{
     auth::Claims,
@@ -54,6 +54,56 @@ struct FluxoRow {
     concluido: bool,
 }
 
+/// US-22: registra que uma sugestão de solução foi exibida nesta triagem.
+/// Base da análise de eficiência (vw_eficiencia_sugestao).
+async fn registrar_exibicao(
+    conn: &mut PgConnection,
+    id_fluxo: i32,
+    id_no: i32,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("INSERT INTO sugestao_triagem (id_fluxo, id_no) VALUES ($1, $2)")
+        .bind(id_fluxo)
+        .bind(id_no)
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
+/// US-22: registra a resposta do usuário à sugestão de solução exibida
+/// (`resolveu` = true quando confirmou que resolveu; false quando seguiu em
+/// frente). Se não houver exibição pendente (ex.: triagem iniciada antes desta
+/// funcionalidade existir), registra a sugestão já com a resposta.
+async fn registrar_resposta(
+    conn: &mut PgConnection,
+    id_fluxo: i32,
+    id_no: i32,
+    resolveu: bool,
+) -> Result<(), sqlx::Error> {
+    let atualizadas = sqlx::query(
+        "UPDATE sugestao_triagem
+         SET resolveu = $2, data_resposta = NOW()
+         WHERE id_fluxo = $1 AND resolveu IS NULL",
+    )
+    .bind(id_fluxo)
+    .bind(resolveu)
+    .execute(&mut *conn)
+    .await?
+    .rows_affected();
+
+    if atualizadas == 0 {
+        sqlx::query(
+            "INSERT INTO sugestao_triagem (id_fluxo, id_no, resolveu, data_resposta)
+             VALUES ($1, $2, $3, NOW())",
+        )
+        .bind(id_fluxo)
+        .bind(id_no)
+        .bind(resolveu)
+        .execute(conn)
+        .await?;
+    }
+    Ok(())
+}
+
 /// Monta a resposta da API: o nó corrente + opções de resposta lidas do banco.
 /// Opções cujo destino está inativo não são oferecidas.
 async fn montar_estado(
@@ -67,7 +117,8 @@ async fn montar_estado(
     )
     .bind(id_no)
     .fetch_one(db)
-    .await?;
+    .await?
+    .com_passos();
 
     let opcoes = if concluido {
         Vec::new()
@@ -125,6 +176,8 @@ pub async fn iniciar_triagem(
 
     let concluido = raiz.tipo_no == TIPO_ETAPA_FINAL;
 
+    let mut tx = state.db.begin().await?;
+
     let id_fluxo: i32 = sqlx::query_scalar(
         "INSERT INTO fluxo_triagem (id_usuario, no_atual, concluido)
          VALUES ($1, $2, $3)
@@ -133,8 +186,15 @@ pub async fn iniciar_triagem(
     .bind(claims.user_id)
     .bind(raiz.id)
     .bind(concluido)
-    .fetch_one(&state.db)
+    .fetch_one(&mut *tx)
     .await?;
+
+    // Árvore cuja raiz já é uma sugestão de solução (caso de borda).
+    if raiz.tipo_no == TIPO_SUGESTAO {
+        registrar_exibicao(&mut tx, id_fluxo, raiz.id).await?;
+    }
+
+    tx.commit().await?;
 
     let estado = montar_estado(&state.db, id_fluxo, raiz.id, concluido).await?;
     Ok((StatusCode::CREATED, Json(estado)))
@@ -189,8 +249,8 @@ pub async fn responder_triagem(
     }
 
     // A opção precisa sair do nó em que a triagem está agora e levar a um nó ativo.
-    let (id_destino, tipo_destino): (i32, String) = sqlx::query_as(
-        "SELECT d.id, d.tipo_no
+    let (id_destino, tipo_destino, tipo_origem): (i32, String, String) = sqlx::query_as(
+        "SELECT d.id, d.tipo_no, o.tipo_no_origem
          FROM opcao_resposta o
          JOIN no_decisao d ON d.id = o.id_no_destino
          WHERE o.id = $1 AND o.id_no_origem = $2 AND d.ativo = true",
@@ -204,6 +264,15 @@ pub async fn responder_triagem(
     ))?;
 
     let concluido = tipo_destino == TIPO_ETAPA_FINAL;
+
+    // US-22: sair de uma sugestão por uma opção ("Não resolveu") significa que
+    // ela não resolveu; chegar a uma sugestão registra que ela foi exibida.
+    if tipo_origem == TIPO_SUGESTAO {
+        registrar_resposta(&mut tx, id_fluxo, fluxo.no_atual, false).await?;
+    }
+    if tipo_destino == TIPO_SUGESTAO {
+        registrar_exibicao(&mut tx, id_fluxo, id_destino).await?;
+    }
 
     sqlx::query("UPDATE fluxo_triagem SET no_atual = $1, concluido = $2 WHERE id = $3")
         .bind(id_destino)
@@ -253,6 +322,9 @@ pub async fn resolver_triagem(
             "só é possível confirmar a resolução em uma sugestão de solução",
         ));
     }
+
+    // US-22: a resolução na triagem fica registrada para a análise de eficiência.
+    registrar_resposta(&mut tx, id_fluxo, fluxo.no_atual, true).await?;
 
     sqlx::query("UPDATE fluxo_triagem SET concluido = true WHERE id = $1")
         .bind(id_fluxo)
