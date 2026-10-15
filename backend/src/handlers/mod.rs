@@ -5,3 +5,4 @@ pub mod cargos;
 pub mod chamados;
 pub mod usuarios;
 pub mod chat;
+pub mod triagem;

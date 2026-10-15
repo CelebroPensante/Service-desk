@@ -2,6 +2,7 @@ pub mod auth;
 pub mod comentario;
 pub mod chat;
 pub mod anexo; 
+pub mod triagem;
 pub use auth::{
     Usuario, RegisterInput, LoginInput, AuthResponse, ErroResposta,
     CargoResumo, NovoCargoInput, UpdateCargoInput, NivelPermissao,
