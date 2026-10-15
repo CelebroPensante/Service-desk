@@ -9,7 +9,9 @@ use sqlx::{PgConnection, PgPool};
 use crate::{
     auth::Claims,
     models::{
-        triagem::{EstadoTriagem, NoDecisao, OpcaoResposta, ResponderInput},
+        triagem::{
+            EstadoTriagem, NoDecisao, OpcaoResposta, PassoTriagem, PercursoTriagem, ResponderInput,
+        },
         ErroResposta,
     },
     AppState,
@@ -101,6 +103,52 @@ async fn registrar_resposta(
         .execute(conn)
         .await?;
     }
+    Ok(())
+}
+
+/// US-24: grava um passo do percurso (pergunta apresentada + resposta
+/// selecionada) e acrescenta a mesma linha em fluxo_triagem.historico.
+/// Deve ser chamada dentro da transação que já travou a triagem (FOR UPDATE),
+/// o que garante a numeração sequencial dos passos.
+async fn registrar_passo(
+    conn: &mut PgConnection,
+    id_fluxo: i32,
+    id_no: i32,
+    pergunta: &str,
+    id_opcao: Option<i32>,
+    resposta: &str,
+) -> Result<(), sqlx::Error> {
+    let ordem: i32 = sqlx::query_scalar(
+        "INSERT INTO passo_triagem (id_fluxo, ordem, id_no, pergunta, id_opcao, resposta)
+         VALUES (
+             $1,
+             (SELECT COALESCE(MAX(ordem), 0) + 1 FROM passo_triagem WHERE id_fluxo = $1),
+             $2, $3, $4, $5
+         )
+         RETURNING ordem",
+    )
+    .bind(id_fluxo)
+    .bind(id_no)
+    .bind(pergunta)
+    .bind(id_opcao)
+    .bind(resposta)
+    .fetch_one(&mut *conn)
+    .await?;
+
+    acrescentar_historico(conn, id_fluxo, &format!("{ordem}. {pergunta} → {resposta}")).await
+}
+
+/// Acrescenta uma linha ao texto do histórico da triagem.
+async fn acrescentar_historico(
+    conn: &mut PgConnection,
+    id_fluxo: i32,
+    linha: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE fluxo_triagem SET historico = historico || $2 || E'\n' WHERE id = $1")
+        .bind(id_fluxo)
+        .bind(linha)
+        .execute(conn)
+        .await?;
     Ok(())
 }
 
@@ -249,10 +297,18 @@ pub async fn responder_triagem(
     }
 
     // A opção precisa sair do nó em que a triagem está agora e levar a um nó ativo.
-    let (id_destino, tipo_destino, tipo_origem): (i32, String, String) = sqlx::query_as(
-        "SELECT d.id, d.tipo_no, o.tipo_no_origem
+    let (id_destino, tipo_destino, tipo_origem, texto_opcao, pergunta_origem, pergunta_destino): (
+        i32,
+        String,
+        String,
+        String,
+        String,
+        String,
+    ) = sqlx::query_as(
+        "SELECT d.id, d.tipo_no, o.tipo_no_origem, o.texto, n.pergunta, d.pergunta
          FROM opcao_resposta o
          JOIN no_decisao d ON d.id = o.id_no_destino
+         JOIN no_decisao n ON n.id = o.id_no_origem
          WHERE o.id = $1 AND o.id_no_origem = $2 AND d.ativo = true",
     )
     .bind(input.id_opcao)
@@ -264,6 +320,25 @@ pub async fn responder_triagem(
     ))?;
 
     let concluido = tipo_destino == TIPO_ETAPA_FINAL;
+
+    // US-24: registra no percurso a pergunta apresentada e a resposta escolhida.
+    registrar_passo(
+        &mut tx,
+        id_fluxo,
+        fluxo.no_atual,
+        &pergunta_origem,
+        Some(input.id_opcao),
+        &texto_opcao,
+    )
+    .await?;
+    if concluido {
+        acrescentar_historico(
+            &mut tx,
+            id_fluxo,
+            &format!("Conclusão: {pergunta_destino} (abrir chamado)"),
+        )
+        .await?;
+    }
 
     // US-22: sair de uma sugestão por uma opção ("Não resolveu") significa que
     // ela não resolveu; chegar a uma sugestão registra que ela foi exibida.
@@ -312,10 +387,11 @@ pub async fn resolver_triagem(
         return Err(ErroTriagem::Conflito("a triagem já foi concluída"));
     }
 
-    let tipo_atual: String = sqlx::query_scalar("SELECT tipo_no FROM no_decisao WHERE id = $1")
-        .bind(fluxo.no_atual)
-        .fetch_one(&mut *tx)
-        .await?;
+    let (tipo_atual, pergunta_atual): (String, String) =
+        sqlx::query_as("SELECT tipo_no, pergunta FROM no_decisao WHERE id = $1")
+            .bind(fluxo.no_atual)
+            .fetch_one(&mut *tx)
+            .await?;
 
     if tipo_atual != TIPO_SUGESTAO {
         return Err(ErroTriagem::Conflito(
@@ -326,6 +402,18 @@ pub async fn resolver_triagem(
     // US-22: a resolução na triagem fica registrada para a análise de eficiência.
     registrar_resposta(&mut tx, id_fluxo, fluxo.no_atual, true).await?;
 
+    // US-24: a confirmação também é um passo do percurso.
+    registrar_passo(
+        &mut tx,
+        id_fluxo,
+        fluxo.no_atual,
+        &pergunta_atual,
+        None,
+        "Resolveu o meu problema",
+    )
+    .await?;
+    acrescentar_historico(&mut tx, id_fluxo, "Conclusão: resolvido na triagem").await?;
+
     sqlx::query("UPDATE fluxo_triagem SET concluido = true WHERE id = $1")
         .bind(id_fluxo)
         .execute(&mut *tx)
@@ -335,4 +423,39 @@ pub async fn resolver_triagem(
 
     let estado = montar_estado(&state.db, id_fluxo, fluxo.no_atual, true).await?;
     Ok(Json(estado))
+}
+
+/// GET /api/triagem/:id/percurso
+/// US-24: devolve as etapas percorridas (perguntas apresentadas e respostas
+/// selecionadas), em ordem. Só o dono da triagem acessa.
+pub async fn consultar_percurso(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(id_fluxo): Path<i32>,
+) -> Result<Json<PercursoTriagem>, ErroTriagem> {
+    let (concluido, historico): (bool, String) = sqlx::query_as(
+        "SELECT concluido, historico FROM fluxo_triagem WHERE id = $1 AND id_usuario = $2",
+    )
+    .bind(id_fluxo)
+    .bind(claims.user_id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(ErroTriagem::NaoEncontrado("triagem não encontrada"))?;
+
+    let passos = sqlx::query_as::<_, PassoTriagem>(
+        "SELECT ordem, pergunta, resposta, data_resposta
+         FROM passo_triagem
+         WHERE id_fluxo = $1
+         ORDER BY ordem",
+    )
+    .bind(id_fluxo)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(PercursoTriagem {
+        id_fluxo,
+        concluido,
+        passos,
+        historico,
+    }))
 }

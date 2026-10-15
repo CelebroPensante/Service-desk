@@ -142,6 +142,7 @@ async fn main() {
             .route("/:id", get(handlers::triagem::consultar_triagem))
             .route("/:id/responder", post(handlers::triagem::responder_triagem))
             .route("/:id/resolver", post(handlers::triagem::resolver_triagem))
+            .route("/:id/percurso", get(handlers::triagem::consultar_percurso))
             .layer(from_fn_with_state(state.clone(), middleware::require_auth));
 
     let app = Router::new()
