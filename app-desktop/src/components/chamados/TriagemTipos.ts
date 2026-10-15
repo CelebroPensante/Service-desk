@@ -6,6 +6,8 @@ export interface NoTriagem {
   pergunta: string
   tipoNo: 'pergunta' | 'sugestao_solucao' | 'etapa_final'
   solucaoSugerida: string | null
+  // US-22: passo a passo da sugestão de solução (vazio nos outros tipos de nó)
+  passos: string[]
 }
 
 export interface OpcaoTriagem {

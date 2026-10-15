@@ -7,8 +7,8 @@ type Request = <T>(path: string, options?: RequestInit) => Promise<T>
 interface Mensagem {
   autor: 'sistema' | 'usuario'
   texto: string
-  // Preenchido quando o nó é uma sugestão de solução
-  solucao?: string
+  // US-22: passo a passo, preenchido quando o nó é uma sugestão de solução
+  passos?: string[]
 }
 
 interface TriagemFluxoProps {
@@ -20,12 +20,15 @@ interface TriagemFluxoProps {
   onCancelar: () => void
 }
 
+function passosDoNo(no: NoTriagem): string[] | undefined {
+  if (no.tipoNo !== 'sugestao_solucao') return undefined
+  if (no.passos?.length) return no.passos
+  // Segurança: se a API não enviar os passos, mostra o texto inteiro como um passo
+  return no.solucaoSugerida ? [no.solucaoSugerida] : undefined
+}
+
 function mensagemDoNo(no: NoTriagem): Mensagem {
-  return {
-    autor: 'sistema',
-    texto: no.pergunta,
-    solucao: no.tipoNo === 'sugestao_solucao' ? (no.solucaoSugerida ?? undefined) : undefined,
-  }
+  return { autor: 'sistema', texto: no.pergunta, passos: passosDoNo(no) }
 }
 
 const BOTAO_OPCAO =
@@ -133,13 +136,22 @@ function TriagemFluxo({ request, onAbrirChamado, onResolvido, onCancelar }: Tria
                 <p className="rounded-2xl rounded-tl-sm bg-slate-100 px-4 py-3 text-sm text-slate-900">
                   {m.texto}
                 </p>
-                {m.solucao && (
+                {m.passos && (
                   <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
                     <p className="flex items-center gap-2 text-xs font-semibold text-amber-800">
                       <Lightbulb size={14} />
-                      Tente isto
+                      Tente isto, passo a passo
                     </p>
-                    <p className="mt-1 text-sm text-slate-900">{m.solucao}</p>
+                    <ol className="mt-2 flex flex-col gap-2">
+                      {m.passos.map((passo, n) => (
+                        <li key={n} className="flex items-start gap-3 text-sm text-slate-900">
+                          <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-amber-200 text-xs font-semibold text-amber-900">
+                            {n + 1}
+                          </span>
+                          <span>{passo}</span>
+                        </li>
+                      ))}
+                    </ol>
                   </div>
                 )}
               </div>
@@ -157,8 +169,25 @@ function TriagemFluxo({ request, onAbrirChamado, onResolvido, onCancelar }: Tria
 
         {erro && <p className="mt-5 rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{erro}</p>}
 
+        {emAndamento && estado.podeResolver && (
+          <p className="mt-5 text-sm font-medium text-slate-900">
+            Depois de seguir os passos, o problema foi resolvido?
+          </p>
+        )}
+
         {emAndamento && (
-          <div className="mt-5 flex flex-wrap gap-3">
+          <div className={`flex flex-wrap gap-3 ${estado.podeResolver ? 'mt-3' : 'mt-5'}`}>
+            {estado.podeResolver && (
+              <button
+                type="button"
+                disabled={enviando}
+                onClick={confirmarResolvido}
+                className={BOTAO_PRIMARIO}
+              >
+                <CheckCircle2 size={16} />
+                Resolveu o meu problema
+              </button>
+            )}
             {estado.opcoes.map((opcao) => (
               <button
                 key={opcao.id}
@@ -170,16 +199,6 @@ function TriagemFluxo({ request, onAbrirChamado, onResolvido, onCancelar }: Tria
                 {opcao.texto}
               </button>
             ))}
-            {estado.podeResolver && (
-              <button
-                type="button"
-                disabled={enviando}
-                onClick={confirmarResolvido}
-                className={BOTAO_OPCAO}
-              >
-                Resolveu o meu problema
-              </button>
-            )}
           </div>
         )}
 
