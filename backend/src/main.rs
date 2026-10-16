@@ -92,6 +92,7 @@ async fn main() {
         )
         .route("/categorias", get(handlers::chamados::listar_categorias))
         .route("/prioridades", get(handlers::chamados::listar_prioridades))
+        .route("/setores", get(handlers::chamados::listar_setores))
         .route("/status", get(handlers::chamados::listar_status))
         .route("/:id/status", put(handlers::chamados::atualizar_status))
         .route("/:id/atendente", put(handlers::chamados::atualizar_atendente))

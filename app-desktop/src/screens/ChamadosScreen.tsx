@@ -3,6 +3,7 @@ import type {
   CategoriaResumo,
   Chamado,
   PrioridadeResumo,
+  SetorResumo,
   Usuario,
 } from "../types";
 import ChamadoDetail from "../components/chamados/ChamadoDetail";
@@ -11,6 +12,7 @@ import ChamadoForm, {
 } from "../components/chamados/ChamadoForm";
 import ChamadosList from "../components/chamados/ChamadosList";
 import TriagemFluxo from "../components/chamados/TriagemFluxo";
+import type { PreenchimentoChamado } from "../components/chamados/TriagemTipos";
 import AppLayout, { type Pagina } from "../components/layout/AppLayout";
 import DashboardView from "../components/dashboard/DashboardView";
 import TecnicoPanel from "../components/tecnico/TecnicoPanel";
@@ -44,6 +46,7 @@ const FORM_VAZIO: ChamadoFormData = {
   descricaoDetalhada: "",
   idCategoria: "",
   idPrioridade: "",
+  idSetor: "",
 };
 
 // NOVO: ordem alfabética, mas "Outros" sempre por último
@@ -59,6 +62,7 @@ function ChamadosScreen({ usuario, token, onSair }: ChamadosScreenProps) {
   const [chamados, setChamados] = useState<Chamado[]>([]);
   const [categorias, setCategorias] = useState<CategoriaResumo[]>([]);
   const [prioridades, setPrioridades] = useState<PrioridadeResumo[]>([]);
+  const [setores, setSetores] = useState<SetorResumo[]>([]);
   const [modo, setModo] = useState<Modo>("dashboard");
   const [selecionado, setSelecionado] = useState<Chamado | null>(null);
   const [form, setForm] = useState<ChamadoFormData>(FORM_VAZIO);
@@ -66,6 +70,11 @@ function ChamadosScreen({ usuario, token, onSair }: ChamadosScreenProps) {
   const [salvando, setSalvando] = useState(false);
   // US-21: a abertura de um chamado novo começa pela triagem guiada
   const [triagemAtiva, setTriagemAtiva] = useState(false);
+  // US-23: triagem que vai originar o chamado novo (e o que ela preencheu)
+  const [triagemOrigem, setTriagemOrigem] = useState<{
+    idFluxo: number;
+    preenchimento: PreenchimentoChamado | null;
+  } | null>(null);
   const [erro, setErro] = useState<string | null>(null);
   // NOVO: erros de carga (categorias, prioridades, chamados), separados do erro de ações
   const [erroDados, setErroDados] = useState<string | null>(null);
@@ -101,10 +110,11 @@ function ChamadosScreen({ usuario, token, onSair }: ChamadosScreenProps) {
     setErro(null);
     setErroDados(null);
 
-    const [rChamados, rCategorias, rPrioridades] = await Promise.allSettled([
+    const [rChamados, rCategorias, rPrioridades, rSetores] = await Promise.allSettled([
       request<Chamado[]>("/api/chamados"),
       request<CategoriaResumo[]>("/api/chamados/categorias"),
       request<PrioridadeResumo[]>("/api/chamados/prioridades"),
+      request<SetorResumo[]>("/api/chamados/setores"),
     ]);
 
     const falhas: string[] = [];
@@ -119,6 +129,10 @@ function ChamadosScreen({ usuario, token, onSair }: ChamadosScreenProps) {
 
     if (rPrioridades.status === "fulfilled") setPrioridades(rPrioridades.value);
     else falhas.push(`prioridades: ${motivo(rPrioridades)}`);
+
+    // Setores só são exibidos/editados por técnicos; para os demais a falha não incomoda
+    if (rSetores.status === "fulfilled") setSetores(rSetores.value);
+    else if (usuario.nivelAcesso >= 2) falhas.push(`setores: ${motivo(rSetores)}`);
 
     if (falhas.length > 0) {
       console.error("Falha ao carregar dados:", falhas);
@@ -135,6 +149,7 @@ function ChamadosScreen({ usuario, token, onSair }: ChamadosScreenProps) {
     setSelecionado(null);
     setForm(FORM_VAZIO);
     setErro(null);
+    setTriagemOrigem(null);
     setTriagemAtiva(true);
     setModo("novo");
   }
@@ -177,6 +192,7 @@ function ChamadosScreen({ usuario, token, onSair }: ChamadosScreenProps) {
       descricaoDetalhada: chamado.descricaoDetalhada,
       idCategoria: String(chamado.idCategoria),
       idPrioridade: String(chamado.idPrioridade),
+      idSetor: chamado.idSetor != null ? String(chamado.idSetor) : "",
     });
     setErro(null);
     setModo("editar");
@@ -192,6 +208,10 @@ function ChamadosScreen({ usuario, token, onSair }: ChamadosScreenProps) {
         descricaoDetalhada: form.descricaoDetalhada,
         idCategoria: Number(form.idCategoria),
         idPrioridade: Number(form.idPrioridade),
+        // US-23: setor (o servidor só aceita de técnico) e triagem de origem
+        idSetor: form.idSetor ? Number(form.idSetor) : undefined,
+        idFluxoTriagem:
+          modo === "novo" && triagemOrigem ? triagemOrigem.idFluxo : undefined,
       });
       if (modo === "editar" && selecionado) {
         await request<Chamado>(`/api/chamados/${selecionado.id}`, { method: "PUT", body });
@@ -201,6 +221,7 @@ function ChamadosScreen({ usuario, token, onSair }: ChamadosScreenProps) {
       await carregarChamados();
       setSelecionado(null);
       setForm(FORM_VAZIO);
+      setTriagemOrigem(null);
       setModo("lista");
     } catch (e) {
       setErro(e instanceof Error ? e.message : "Não foi possível salvar o chamado.");
@@ -296,7 +317,20 @@ function ChamadosScreen({ usuario, token, onSair }: ChamadosScreenProps) {
     return comLayout(
       <TriagemFluxo
         request={request}
-        onAbrirChamado={() => setTriagemAtiva(false)}
+        onAbrirChamado={(estado) => {
+          setTriagemAtiva(false);
+          // US-23: seguindo pela etapa final, o formulário já vem preenchido
+          if (estado?.resultado === "abrir_chamado") {
+            const p = estado.preenchimento;
+            setTriagemOrigem({ idFluxo: estado.idFluxo, preenchimento: p });
+            setForm((atual) => ({
+              ...atual,
+              idCategoria: p?.idCategoria != null ? String(p.idCategoria) : atual.idCategoria,
+              idPrioridade: p?.idPrioridade != null ? String(p.idPrioridade) : atual.idPrioridade,
+              idSetor: p?.idSetor != null ? String(p.idSetor) : atual.idSetor,
+            }));
+          }
+        }}
         onResolvido={() => {
           setTriagemAtiva(false);
           setModo("dashboard");
@@ -310,17 +344,39 @@ function ChamadosScreen({ usuario, token, onSair }: ChamadosScreenProps) {
   }
 
   if (modo === "novo" || modo === "editar") {
+    // US-23: o que a triagem definiu fica visível; só a equipe técnica (nível >= 2) altera
+    const tecnico = usuario.nivelAcesso >= 2;
+    const editando = modo === "editar";
+    const origemTriagem = editando
+      ? selecionado?.idFluxoTriagem != null
+      : triagemOrigem != null;
+    const preenchimento = triagemOrigem?.preenchimento ?? null;
+    const travarCategoria =
+      !tecnico && (editando ? origemTriagem : preenchimento?.idCategoria != null);
+    const travarPrioridade =
+      !tecnico && (editando ? origemTriagem : preenchimento?.idPrioridade != null);
+    const setorNome = editando ? (selecionado?.setor ?? null) : (preenchimento?.setor ?? null);
+
     return comLayout(
       <ChamadoForm
         modo={modo}
         form={form}
         categorias={ordenarCategorias(categorias)}
         prioridades={prioridades}
+        setores={setores}
+        origemTriagem={origemTriagem}
+        travarCategoria={travarCategoria}
+        travarPrioridade={travarPrioridade}
+        podeEditarSetor={tecnico}
+        setorNome={setorNome}
         erro={erro ?? erroDados}
         salvando={salvando}
         onSubmit={salvarChamado}
         onChange={alterarCampo}
-        onCancel={() => setModo("lista")}
+        onCancel={() => {
+          setTriagemOrigem(null);
+          setModo("lista");
+        }}
       />,
     );
   }

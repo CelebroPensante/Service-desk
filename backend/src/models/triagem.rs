@@ -83,6 +83,21 @@ pub struct EstadoTriagem {
     pub no_atual: NoDecisao,
     pub opcoes: Vec<OpcaoResposta>,
     pub pode_resolver: bool,
+    /// US-23: como o chamado será preenchido (só na etapa final).
+    pub preenchimento: Option<PreenchimentoChamado>,
+}
+
+/// US-23: categoria, prioridade e setor definidos pela etapa final da árvore.
+/// Cada campo é nulo quando a etapa final não o define.
+#[derive(Debug, Serialize, FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct PreenchimentoChamado {
+    pub id_categoria: Option<i32>,
+    pub categoria: Option<String>,
+    pub id_prioridade: Option<i32>,
+    pub prioridade: Option<String>,
+    pub id_setor: Option<i32>,
+    pub setor: Option<String>,
 }
 
 /// US-24: um passo do percurso (pergunta apresentada + resposta selecionada).

@@ -9,7 +9,7 @@ pub use auth::{
     UsuarioResumo, AtribuirCargoInput,
     Chamado, NovoChamadoInput, AtualizarChamadoInput, AtualizarStatusChamadoInput,
     AtribuirAtendenteInput, CategoriaResumo, PrioridadeResumo, StatusChamadoResumo,
-    TecnicoResumo,
+    TecnicoResumo, SetorResumo,
 };
 pub use comentario::Comentario;
 pub use chat::MensagemChat;

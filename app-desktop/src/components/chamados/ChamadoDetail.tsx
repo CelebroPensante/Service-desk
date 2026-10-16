@@ -91,6 +91,18 @@ export default function ChamadoDetail({
                   Categoria:{" "}
                   <strong className="text-slate-800 font-semibold">{chamado.categoria}</strong>
                 </span>
+                {chamado.setor && (
+                  <span>
+                    Setor:{" "}
+                    <strong className="text-slate-800 font-semibold">{chamado.setor}</strong>
+                  </span>
+                )}
+                {chamado.idFluxoTriagem != null && (
+                  <span>
+                    Origem:{" "}
+                    <strong className="text-slate-800 font-semibold">Triagem guiada</strong>
+                  </span>
+                )}
                 <span>
                   Aberto em:{" "}
                   <strong className="text-slate-800 font-semibold">
