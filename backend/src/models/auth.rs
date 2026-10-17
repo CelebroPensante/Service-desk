@@ -143,6 +143,15 @@ pub struct Chamado {
     pub prioridade: String,
     pub status: String,
 
+    /// US-23: equipe (setor) para a qual o chamado foi encaminhado.
+    #[serde(rename = "idSetor")]
+    pub id_setor: Option<i32>,
+    pub setor: Option<String>,
+
+    /// US-23: triagem que originou o chamado (nulo se foi aberto manualmente).
+    #[serde(rename = "idFluxoTriagem")]
+    pub id_fluxo_triagem: Option<i32>,
+
     #[serde(rename = "dataAbertura")]
     pub data_abertura: NaiveDateTime,
 
@@ -165,6 +174,14 @@ pub struct NovoChamadoInput {
 
     #[serde(rename = "idPrioridade")]
     pub id_prioridade: i32,
+
+    /// US-23: triagem concluída que originou este chamado.
+    #[serde(rename = "idFluxoTriagem", default)]
+    pub id_fluxo_triagem: Option<i32>,
+
+    /// US-23: setor escolhido manualmente (só vale para técnico, nível >= 2).
+    #[serde(rename = "idSetor", default)]
+    pub id_setor: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -179,6 +196,10 @@ pub struct AtualizarChamadoInput {
 
     #[serde(rename = "idPrioridade")]
     pub id_prioridade: i32,
+
+    /// US-23: novo setor (só vale para técnico, nível >= 2).
+    #[serde(rename = "idSetor", default)]
+    pub id_setor: Option<i32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -202,6 +223,17 @@ pub struct StatusChamadoResumo {
 
 #[derive(Debug, Serialize)]
 pub struct TecnicoResumo {
+    pub id: i32,
+    pub nome: String,
+
+    /// US-23: equipe do técnico.
+    #[serde(rename = "idSetor")]
+    pub id_setor: Option<i32>,
+}
+
+/// US-23: setor (equipe de atendimento).
+#[derive(Debug, Serialize)]
+pub struct SetorResumo {
     pub id: i32,
     pub nome: String,
 }

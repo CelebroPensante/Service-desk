@@ -9,6 +9,8 @@ type Request = <T>(path: string, options?: RequestInit) => Promise<T>
 interface Tecnico {
   id: number
   nome: string
+  // US-23: equipe do técnico
+  idSetor: number | null
 }
 
 interface TriagemPanelProps {
@@ -86,6 +88,7 @@ function TriagemPanel({ chamados, request, onRecarregar, onDetalhe }: TriagemPan
               <tr>
                 <th className="px-5 py-3 font-medium">Chamado</th>
                 <th className="px-4 py-3 font-medium">Categoria</th>
+                <th className="px-4 py-3 font-medium">Setor</th>
                 <th className="px-4 py-3 font-medium">Prioridade</th>
                 <th className="px-4 py-3 font-medium">Status</th>
                 <th className="px-4 py-3 font-medium">Atribuir técnico</th>
@@ -94,10 +97,13 @@ function TriagemPanel({ chamados, request, onRecarregar, onDetalhe }: TriagemPan
             </thead>
             <tbody className="divide-y divide-slate-200">
               {pendentes.length === 0 ? (
-                <tr><td colSpan={6} className="px-5 py-10 text-center text-slate-500">Não há chamados aguardando distribuição.</td></tr>
+                <tr><td colSpan={7} className="px-5 py-10 text-center text-slate-500">Não há chamados aguardando distribuição.</td></tr>
               ) : pendentes.map((chamado) => {
                 const dados = extras(chamado)
                 const ocupado = salvandoId === chamado.id
+                // US-23: o chamado já vem encaminhado a um setor; sugere os técnicos dele
+                const doSetor = chamado.idSetor != null ? tecnicos.filter((t) => t.idSetor === chamado.idSetor) : []
+                const opcoesTecnico = doSetor.length > 0 ? doSetor : tecnicos
                 return (
                   <tr key={chamado.id} className="hover:bg-slate-50/60">
                     <td className="px-5 py-3.5">
@@ -105,6 +111,7 @@ function TriagemPanel({ chamados, request, onRecarregar, onDetalhe }: TriagemPan
                       <span className="font-semibold text-slate-900">{chamado.titulo}</span>
                     </td>
                     <td className="px-4 py-3.5 text-slate-600">{chamado.categoria}</td>
+                    <td className="px-4 py-3.5 text-slate-600">{chamado.setor ?? '—'}</td>
                     <td className="px-4 py-3.5">
                       {dados.prioridade && <span className={`${BADGE} ${estiloPrioridade(dados.prioridade)}`}>{dados.prioridade}</span>}
                     </td>
@@ -117,8 +124,10 @@ function TriagemPanel({ chamados, request, onRecarregar, onDetalhe }: TriagemPan
                         onChange={(e) => void atribuir(chamado, Number(e.target.value))}
                         className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 disabled:opacity-60"
                       >
-                        <option value="">Selecionar técnico</option>
-                        {tecnicos.map((tecnico) => <option key={tecnico.id} value={tecnico.id}>{tecnico.nome}</option>)}
+                        <option value="">
+                          {doSetor.length > 0 ? `Técnicos de ${chamado.setor}` : 'Selecionar técnico'}
+                        </option>
+                        {opcoesTecnico.map((tecnico) => <option key={tecnico.id} value={tecnico.id}>{tecnico.nome}</option>)}
                       </select>
                     </td>
                     <td className="px-4 py-3.5 text-right">

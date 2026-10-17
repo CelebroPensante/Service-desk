@@ -20,6 +20,10 @@ export interface Chamado {
   categoria: string
   prioridade: string
   status: string
+  // US-23: equipe para a qual o chamado foi encaminhado e triagem que o originou
+  idSetor: number | null
+  setor: string | null
+  idFluxoTriagem: number | null
   dataAbertura: string
   dataResolucao: string | null
   dataAtualizacao: string
@@ -28,6 +32,12 @@ export interface Chamado {
 export interface CategoriaResumo {
   id: number
   categoria: string
+}
+
+// US-23: setor (equipe de atendimento)
+export interface SetorResumo {
+  id: number
+  nome: string
 }
 
 export interface PrioridadeResumo {

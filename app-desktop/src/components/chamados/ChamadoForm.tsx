@@ -1,6 +1,6 @@
 import { useEffect, type FormEvent } from 'react'
-import { Send, Sparkles } from 'lucide-react'
-import type { CategoriaResumo, PrioridadeResumo } from '../../types'
+import { Lock, Send, Sparkles, Wand2 } from 'lucide-react'
+import type { CategoriaResumo, PrioridadeResumo, SetorResumo } from '../../types'
 import { normalizar } from './ChamadoUi'
 
 export interface ChamadoFormData {
@@ -8,6 +8,7 @@ export interface ChamadoFormData {
   descricaoDetalhada: string
   idCategoria: string
   idPrioridade: string
+  idSetor: string
 }
 
 interface ChamadoFormProps {
@@ -15,6 +16,13 @@ interface ChamadoFormProps {
   form: ChamadoFormData
   categorias: CategoriaResumo[]
   prioridades: PrioridadeResumo[]
+  // US-23: setores (equipes) e travas conforme a permissão do usuário
+  setores: SetorResumo[]
+  origemTriagem: boolean
+  travarCategoria: boolean
+  travarPrioridade: boolean
+  podeEditarSetor: boolean
+  setorNome: string | null
   erro: string | null
   salvando: boolean
   onSubmit: (event: FormEvent) => void
@@ -34,6 +42,12 @@ function ChamadoForm({
   form,
   categorias,
   prioridades,
+  setores,
+  origemTriagem,
+  travarCategoria,
+  travarPrioridade,
+  podeEditarSetor,
+  setorNome,
   erro,
   salvando,
   onSubmit,
@@ -62,6 +76,17 @@ function ChamadoForm({
       </p>
 
       <form onSubmit={onSubmit} className="mt-8 rounded-2xl border border-slate-200 bg-white p-7">
+        {origemTriagem && (
+          <div className="mb-5 flex items-start gap-3 rounded-xl border border-blue-200 bg-blue-50/60 px-4 py-3">
+            <Wand2 size={16} className="mt-0.5 shrink-0 text-brand" />
+            <p className="text-sm text-slate-900">
+              <span className="font-semibold">Preenchido pela triagem.</span>{' '}
+              Categoria, prioridade e setor vieram das suas respostas
+              {travarCategoria || travarPrioridade ? '; só a equipe técnica pode alterá-los.' : '.'}
+            </p>
+          </div>
+        )}
+
         <div>
           <label htmlFor="titulo" className={LABEL}>Título do problema</label>
           <input
@@ -96,7 +121,8 @@ function ChamadoForm({
               value={form.idCategoria}
               onChange={(e) => onChange('idCategoria', e.target.value)}
               required
-              className={CAMPO}
+              disabled={travarCategoria}
+              className={`${CAMPO} disabled:cursor-not-allowed disabled:opacity-70`}
             >
               <option value="">Selecione...</option>
               {categorias.map((c) => (
@@ -112,7 +138,8 @@ function ChamadoForm({
               value={form.idPrioridade}
               onChange={(e) => onChange('idPrioridade', e.target.value)}
               required
-              className={CAMPO}
+              disabled={travarPrioridade}
+              className={`${CAMPO} disabled:cursor-not-allowed disabled:opacity-70`}
             >
               {!form.idPrioridade && <option value="">Selecione...</option>}
               {prioridades.map((p) => (
@@ -121,6 +148,36 @@ function ChamadoForm({
             </select>
           </div>
         </div>
+
+        {(podeEditarSetor || setorNome) && (
+          <div className="mt-5">
+            <label htmlFor="setor" className={LABEL}>
+              Setor responsável
+              {!podeEditarSetor && <Lock size={12} className="ml-1.5 inline text-slate-500" aria-label="somente leitura" />}
+            </label>
+            {podeEditarSetor ? (
+              <select
+                id="setor"
+                value={form.idSetor}
+                onChange={(e) => onChange('idSetor', e.target.value)}
+                className={CAMPO}
+              >
+                <option value="">Sem setor definido</option>
+                {setores.map((s) => (
+                  <option key={s.id} value={s.id}>{s.nome}</option>
+                ))}
+              </select>
+            ) : (
+              <input
+                id="setor"
+                type="text"
+                value={setorNome ?? ''}
+                readOnly
+                className={`${CAMPO} cursor-not-allowed opacity-70`}
+              />
+            )}
+          </div>
+        )}
 
         {!editando && (
           <div className="mt-5 flex items-center justify-between gap-4 rounded-xl border border-dashed border-blue-300 bg-blue-50/60 px-4 py-4">

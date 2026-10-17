@@ -92,6 +92,7 @@ async fn main() {
         )
         .route("/categorias", get(handlers::chamados::listar_categorias))
         .route("/prioridades", get(handlers::chamados::listar_prioridades))
+        .route("/setores", get(handlers::chamados::listar_setores))
         .route("/status", get(handlers::chamados::listar_status))
         .route("/:id/status", put(handlers::chamados::atualizar_status))
         .route("/:id/atendente", put(handlers::chamados::atualizar_atendente))
@@ -175,6 +176,17 @@ async fn main() {
                     "/usuarios/:id/cargo",
                     patch(handlers::usuarios::atribuir_cargo),
                 )
+                // US-25: gestão dos fluxos de triagem
+                .route("/triagem/arvore", get(handlers::triagem_admin::listar_arvore))
+                .route("/triagem/validacao", get(handlers::triagem_admin::consultar_validacao))
+                .route("/triagem/auditoria", get(handlers::triagem_admin::listar_auditoria))
+                .route("/triagem/nos", post(handlers::triagem_admin::criar_no))
+                .route("/triagem/nos/:id", put(handlers::triagem_admin::editar_no).delete(handlers::triagem_admin::excluir_no))
+                .route("/triagem/nos/:id/raiz", put(handlers::triagem_admin::definir_raiz))
+                .route("/triagem/nos/:id/ativar-ramo", put(handlers::triagem_admin::ativar_ramo))
+                .route("/triagem/nos/:id/desativar-ramo", put(handlers::triagem_admin::desativar_ramo))
+                .route("/triagem/opcoes", post(handlers::triagem_admin::criar_opcao))
+                .route("/triagem/opcoes/:id", put(handlers::triagem_admin::editar_opcao).delete(handlers::triagem_admin::excluir_opcao))
                 .layer(from_fn(|req, next| {
                     middleware::auth::require_nivel_minimo(5, req, next)
                 }))

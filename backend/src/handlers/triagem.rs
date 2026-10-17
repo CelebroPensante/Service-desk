@@ -10,7 +10,8 @@ use crate::{
     auth::Claims,
     models::{
         triagem::{
-            EstadoTriagem, NoDecisao, OpcaoResposta, PassoTriagem, PercursoTriagem, ResponderInput,
+            EstadoTriagem, NoDecisao, OpcaoResposta, PassoTriagem, PercursoTriagem,
+            PreenchimentoChamado, ResponderInput,
         },
         ErroResposta,
     },
@@ -194,6 +195,25 @@ async fn montar_estado(
     };
     let pode_resolver = !concluido && no.tipo_no == TIPO_SUGESTAO;
 
+    // US-23: a etapa final define como o chamado será preenchido.
+    let preenchimento = if no.tipo_no == TIPO_ETAPA_FINAL {
+        sqlx::query_as::<_, PreenchimentoChamado>(
+            "SELECT n.id_categoria,  c.categoria,
+                    n.id_prioridade, p.prioridade,
+                    n.id_setor,      s.nome AS setor
+             FROM no_decisao n
+             LEFT JOIN categoria  c ON c.id = n.id_categoria
+             LEFT JOIN prioridade p ON p.id = n.id_prioridade
+             LEFT JOIN setor      s ON s.id = n.id_setor
+             WHERE n.id = $1",
+        )
+        .bind(id_no)
+        .fetch_optional(db)
+        .await?
+    } else {
+        None
+    };
+
     Ok(EstadoTriagem {
         id_fluxo,
         concluido,
@@ -201,6 +221,7 @@ async fn montar_estado(
         no_atual: no,
         opcoes,
         pode_resolver,
+        preenchimento,
     })
 }
 

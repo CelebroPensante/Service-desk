@@ -14,7 +14,8 @@ interface Mensagem {
 interface TriagemFluxoProps {
   request: Request
   // A triagem terminou em abertura de chamado, ou o usuário pulou a triagem
-  onAbrirChamado: () => void
+  // US-23: ao seguir pela etapa final, recebe o estado (com o preenchimento); ao pular, nada
+  onAbrirChamado: (estado?: EstadoTriagem) => void
   // O usuário confirmou que a solução sugerida resolveu o problema
   onResolvido: () => void
   onCancelar: () => void
@@ -203,14 +204,32 @@ function TriagemFluxo({ request, onAbrirChamado, onResolvido, onCancelar }: Tria
         )}
 
         {estado?.concluido && estado.resultado === 'abrir_chamado' && (
-          <div className="mt-5 flex items-center justify-between gap-4 rounded-xl border border-dashed border-blue-300 bg-blue-50/60 px-4 py-4">
+          <div className="mt-5 rounded-xl border border-dashed border-blue-300 bg-blue-50/60 px-4 py-4">
             <p className="text-sm text-slate-900">
               Não foi possível resolver pela triagem. Vamos registrar o seu chamado.
             </p>
-            <button type="button" onClick={onAbrirChamado} className={BOTAO_PRIMARIO}>
-              Continuar para o chamado
-              <ArrowRight size={16} />
-            </button>
+            {estado.preenchimento && (
+              <dl className="mt-3 flex flex-wrap gap-x-8 gap-y-2 text-sm">
+                {([
+                  ['Categoria', estado.preenchimento.categoria],
+                  ['Prioridade', estado.preenchimento.prioridade],
+                  ['Encaminhado para', estado.preenchimento.setor],
+                ] as const).map(([rotulo, valor]) =>
+                  valor ? (
+                    <div key={rotulo}>
+                      <dt className="text-xs text-slate-600">{rotulo}</dt>
+                      <dd className="font-semibold text-slate-900">{valor}</dd>
+                    </div>
+                  ) : null,
+                )}
+              </dl>
+            )}
+            <div className="mt-4 flex justify-end">
+              <button type="button" onClick={() => onAbrirChamado(estado)} className={BOTAO_PRIMARIO}>
+                Continuar para o chamado
+                <ArrowRight size={16} />
+              </button>
+            </div>
           </div>
         )}
 
@@ -221,7 +240,7 @@ function TriagemFluxo({ request, onAbrirChamado, onResolvido, onCancelar }: Tria
               Que bom que deu certo! Nenhum chamado foi aberto.
             </p>
             <div className="flex shrink-0 gap-3">
-              <button type="button" onClick={onAbrirChamado} className={BOTAO_SECUNDARIO}>
+              <button type="button" onClick={() => onAbrirChamado()} className={BOTAO_SECUNDARIO}>
                 Abrir chamado mesmo assim
               </button>
               <button type="button" onClick={onResolvido} className={BOTAO_PRIMARIO}>
@@ -234,7 +253,7 @@ function TriagemFluxo({ request, onAbrirChamado, onResolvido, onCancelar }: Tria
         <div className="mt-6 flex items-center justify-between gap-3 border-t border-slate-100 pt-5">
           <button
             type="button"
-            onClick={onAbrirChamado}
+            onClick={() => onAbrirChamado()}
             className="text-sm font-medium text-brand underline-offset-2 hover:underline"
           >
             Pular a triagem e abrir o chamado manualmente

@@ -139,6 +139,122 @@ check("triagem parada na sugestão: 2 passos, não concluída", (len(pc5["passos
 s, pc4 = req("GET", f"/api/triagem/{f4}/percurso", token=ta)
 check("resposta inválida não gera passo (f4 tem só o passo válido)", len(pc4["passos"]), 1)
 
+# =====================================================================
+# US-23: preenchimento automático do chamado pela triagem
+# =====================================================================
+def percorrer(token, respostas):
+    """Inicia uma triagem e responde pelo texto das opções. Devolve (idFluxo, estado)."""
+    _, est = req("POST", "/api/triagem/iniciar", token=token)
+    fluxo = est["idFluxo"]
+    for texto in respostas:
+        _, est = req("POST", f"/api/triagem/{fluxo}/responder", {"idOpcao": opcao(est, texto)}, token)
+    return fluxo, est
+
+_, cats = req("GET", "/api/chamados/categorias", token=ta)
+_, pris = req("GET", "/api/chamados/prioridades", token=ta)
+cat = {c["categoria"]: c["id"] for c in cats}
+pri = {p["prioridade"]: p["id"] for p in pris}
+ID_OUTROS, ID_BAIXA = cat["Outros"], pri["Baixa"]
+
+# --- A: a etapa final informa como o chamado será preenchido
+fA, eA = percorrer(ta, ["Sim", "Não"])   # monitor sem imagem -> falha de hardware
+pre = eA["preenchimento"]
+check("etapa final traz o preenchimento (categoria, prioridade, setor)",
+      (pre["categoria"], pre["prioridade"], pre["setor"]), ("Hardware", "Alta", "Infraestrutura"))
+check("preenchimento traz também os ids", all(pre[k] for k in ("idCategoria", "idPrioridade", "idSetor")), True)
+s, eA2 = req("GET", f"/api/triagem/{fA}", token=ta)
+check("GET retoma a etapa final com o mesmo preenchimento", eA2["preenchimento"], pre)
+_, e_meio = req("POST", "/api/triagem/iniciar", token=ta)
+check("nó que não é etapa final não traz preenchimento", e_meio["preenchimento"], None)
+f_aberta = e_meio["idFluxo"]
+
+# --- B: chamado nasce da triagem; o servidor aplica a classificação
+corpo = {"titulo": "Monitor sem imagem", "descricaoDetalhada": "Liga, mas não aparece imagem.",
+         "idCategoria": ID_OUTROS, "idPrioridade": ID_BAIXA, "idFluxoTriagem": fA,
+         "idSetor": 1}  # solicitante não define setor: deve ser ignorado
+s, ch = req("POST", "/api/chamados", corpo, ta)
+check("chamado criado a partir da triagem -> 201", s, 201)
+check("categoria/prioridade vêm da triagem, mesmo se o formulário mandar outras",
+      (ch["categoria"], ch["prioridade"]), ("Hardware", "Alta"))
+check("chamado encaminhado ao setor da triagem", ch["setor"], "Infraestrutura")
+check("chamado guarda a triagem de origem", ch["idFluxoTriagem"], fA)
+check("status inicial segue 'Aberto'", ch["status"], "Aberto")
+chA = ch["id"]
+
+s, c2 = req("GET", f"/api/chamados/{chA}", token=ta)
+check("consulta do chamado devolve setor e triagem de origem", (c2["setor"], c2["idFluxoTriagem"]), ("Infraestrutura", fA))
+
+# --- C: a triagem registra o chamado gerado no histórico
+s, pcA = req("GET", f"/api/triagem/{fA}/percurso", token=ta)
+check("histórico registra o chamado aberto",
+      pcA["historico"].strip().split("\n")[-1], f"Chamado aberto: CHM-{chA:04d}")
+
+# --- D, E, F: a triagem só vale uma vez, só do dono, só concluída em etapa final
+s, _ = req("POST", "/api/chamados", corpo, ta)
+check("triagem já usada não gera outro chamado -> 409", s, 409)
+s, _ = req("POST", "/api/chamados", {**corpo, "idFluxoTriagem": fA}, tb)
+check("triagem de outro usuário -> 404", s, 404)
+s, _ = req("POST", "/api/chamados", {**corpo, "idFluxoTriagem": f_aberta}, ta)
+check("triagem ainda não concluída -> 409", s, 409)
+s, _ = req("POST", "/api/chamados", {**corpo, "idFluxoTriagem": f1}, ta)
+check("triagem resolvida (sem etapa final) -> 409", s, 409)
+s, _ = req("POST", "/api/chamados", {**corpo, "idFluxoTriagem": 999999}, ta)
+check("triagem inexistente -> 404", s, 404)
+
+# --- G: sem triagem, tudo como antes
+s, man = req("POST", "/api/chamados", {"titulo": "Pedido manual", "descricaoDetalhada": "x",
+             "idCategoria": ID_OUTROS, "idPrioridade": ID_BAIXA, "idSetor": 1}, ta)
+check("sem triagem: categoria/prioridade escolhidas são respeitadas",
+      (man["categoria"], man["prioridade"]), ("Outros", "Baixa"))
+check("sem triagem: solicitante não define setor", (man["setor"], man["idFluxoTriagem"]), (None, None))
+
+# --- H: edição conforme permissão
+edicao = {"titulo": "Monitor sem imagem (editado)", "descricaoDetalhada": "Atualizei a descrição.",
+          "idCategoria": ID_OUTROS, "idPrioridade": ID_BAIXA, "idSetor": 2}
+s, ed = req("PUT", f"/api/chamados/{chA}", edicao, ta)
+check("solicitante edita título/descrição do chamado da triagem -> 200", s, 200)
+check("solicitante não reclassifica chamado da triagem (categoria/prioridade/setor mantidos)",
+      (ed["categoria"], ed["prioridade"], ed["setor"]), ("Hardware", "Alta", "Infraestrutura"))
+check("título foi atualizado", ed["titulo"], "Monitor sem imagem (editado)")
+s, ed2 = req("PUT", f"/api/chamados/{man['id']}", {**edicao, "idCategoria": cat["Rede"]}, ta)
+check("chamado manual: solicitante ainda reclassifica -> categoria nova", ed2["categoria"], "Rede")
+
+# --- I: lista de setores
+s, setores = req("GET", "/api/chamados/setores", token=ta)
+check("lista de setores", (s, {x["nome"] for x in setores} >= {"Infraestrutura", "Redes", "Sistemas", "Segurança e Acessos"}), (200, True))
+s, _ = req("GET", "/api/chamados/setores")
+check("setores sem token -> 401", s, 401)
+
+# --- K: outra etapa final define outra classificação
+fK, eK = percorrer(ta, ["Sim", "Sim"])   # tem imagem no monitor -> software
+check("outra etapa final: Software / Média / Sistemas",
+      (eK["preenchimento"]["categoria"], eK["preenchimento"]["prioridade"], eK["preenchimento"]["setor"]),
+      ("Software", "Média", "Sistemas"))
+
+# --- L: técnico (opcional; defina TECNICO_EMAIL e TECNICO_SENHA com um usuário de nível >= 2)
+import os
+tec_email, tec_senha = os.environ.get("TECNICO_EMAIL"), os.environ.get("TECNICO_SENHA")
+if tec_email and tec_senha:
+    s, r = req("POST", "/api/auth/login", {"email": tec_email, "senha": tec_senha})
+    tt = r["token"]
+    # triagem do técnico
+    fT, eT = percorrer(tt, ["Sim", "Sim"])
+    s, chT = req("POST", "/api/chamados", {"titulo": "Software lento", "descricaoDetalhada": "x",
+                 "idCategoria": cat["Rede"], "idPrioridade": pri["Crítica"], "idFluxoTriagem": fT}, tt)
+    check("técnico ajusta categoria/prioridade preenchidas pela triagem",
+          (chT["categoria"], chT["prioridade"]), ("Rede", "Crítica"))
+    check("técnico sem setor no formulário: vale o setor da triagem", chT["setor"], "Sistemas")
+    id_redes = next(x["id"] for x in setores if x["nome"] == "Redes")
+    s, edT = req("PUT", f"/api/chamados/{chA}", {**edicao, "idCategoria": cat["Software"], "idPrioridade": pri["Média"], "idSetor": id_redes}, tt)
+    check("técnico reclassifica chamado vindo da triagem (categoria/prioridade/setor)",
+          (edT["categoria"], edT["prioridade"], edT["setor"]), ("Software", "Média", "Redes"))
+    s, tecs = req("GET", "/api/tecnicos", token=tt)
+    check("lista de técnicos informa o setor de cada um", all("idSetor" in x for x in tecs), True)
+    s, _ = req("GET", "/api/tecnicos", token=ta)
+    check("solicitante não lista técnicos -> 403", s, 403)
+else:
+    print("(pulado) checagens do técnico: defina TECNICO_EMAIL e TECNICO_SENHA para rodá-las")
+
 print()
 print("Registro da US-22 (rode no pgAdmin/psql para conferir a eficiência):")
 print("  SELECT * FROM vw_eficiencia_sugestao;")

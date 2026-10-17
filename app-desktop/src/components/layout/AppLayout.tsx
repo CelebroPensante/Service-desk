@@ -1,9 +1,9 @@
 import type { ReactNode } from 'react'
-import { BarChart3, ClipboardList, Headset, KeyRound, LayoutGrid, LogOut, PlusCircle, Shield, Ticket, Users } from 'lucide-react'
+import { BarChart3, ClipboardList, GitBranch, Headset, KeyRound, LayoutGrid, LogOut, PlusCircle, Shield, Ticket, Users } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { Usuario } from '../../types'
 
-export type Pagina = 'dashboard' | 'chamados' | 'novo' | 'tecnico' | 'triagem' | 'relatorios' | 'usuarios' | 'cargos'
+export type Pagina = 'dashboard' | 'chamados' | 'novo' | 'tecnico' | 'triagem' | 'relatorios' | 'usuarios' | 'cargos' | 'fluxos'
 
 interface AppLayoutProps {
   usuario: Usuario
@@ -24,6 +24,7 @@ const ITENS: { pagina: Pagina; label: string; icon: LucideIcon; nivelMinimo: num
   { pagina: 'relatorios', label: 'Relatórios', icon: BarChart3, nivelMinimo: 4 },
   { pagina: 'usuarios', label: 'Gestão de Usuários', icon: Users, nivelMinimo: 5 },
   { pagina: 'cargos', label: 'Cargos e Permissões', icon: KeyRound, nivelMinimo: 5 },
+  { pagina: 'fluxos', label: 'Fluxos de Triagem', icon: GitBranch, nivelMinimo: 5 },
 ]
 
 function iniciais(nome: string) {

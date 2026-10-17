@@ -6,3 +6,4 @@ pub mod chamados;
 pub mod usuarios;
 pub mod chat;
 pub mod triagem;
+pub mod triagem_admin;
