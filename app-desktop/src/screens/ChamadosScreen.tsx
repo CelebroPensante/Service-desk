@@ -16,10 +16,11 @@ import type { PreenchimentoChamado } from "../components/chamados/TriagemTipos";
 import AppLayout, { type Pagina } from "../components/layout/AppLayout";
 import DashboardView from "../components/dashboard/DashboardView";
 import TecnicoPanel from "../components/tecnico/TecnicoPanel";
-import GestaoUsuarios from "../components/adminn/GestaoUsuarios";
-import CargosPermissoes from "../components/adminn/CargosPermissoes";
+import GestaoUsuarios from "../components/admin/GestaoUsuarios";
+import CargosPermissoes from "../components/admin/CargosPermissoes";
 import TriagemPanel from "../components/triagem/TriagemPanel";
 import RelatoriosPanel from "../components/relatorios/RelatoriosPanel";
+import FluxosTriagem from "../components/admin/FluxosTriagem";
 
 const API_URL = "http://localhost:8080";
 // NOVO: "dashboard" é a tela inicial agora
@@ -33,7 +34,8 @@ type Modo =
   | "triagem"
   | "relatorios"
   | "usuarios"
-  | "cargos";
+  | "cargos"
+  | "fluxos";
 
 interface ChamadosScreenProps {
   usuario: Usuario;
@@ -165,7 +167,7 @@ function ChamadosScreen({ usuario, token, onSair }: ChamadosScreenProps) {
 
   // Qual item da sidebar fica destacado
   const paginaAtiva: Pagina =
-    modo === "dashboard" || modo === "tecnico" || modo === "triagem" || modo === "relatorios" || modo === "usuarios" || modo === "cargos"
+    modo === "dashboard" || modo === "tecnico" || modo === "triagem" || modo === "relatorios" || modo === "usuarios" || modo === "cargos"  || modo === "fluxos"
       ? modo
       : modo === "novo"
         ? "novo"
@@ -299,6 +301,10 @@ function ChamadosScreen({ usuario, token, onSair }: ChamadosScreenProps) {
 
   if (modo === "cargos" && usuario.nivelAcesso >= 5) {
     return comLayout(<CargosPermissoes request={request} />);
+  }
+
+  if (modo === "fluxos" && usuario.nivelAcesso >= 5) {
+    return comLayout(<FluxosTriagem request={request} />);
   }
 
   if (modo === "dashboard") {

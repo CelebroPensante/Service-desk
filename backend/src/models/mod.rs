@@ -3,6 +3,7 @@ pub mod comentario;
 pub mod chat;
 pub mod anexo; 
 pub mod triagem;
+pub mod triagem_admin;
 pub use auth::{
     Usuario, RegisterInput, LoginInput, AuthResponse, ErroResposta,
     CargoResumo, NovoCargoInput, UpdateCargoInput, NivelPermissao,
