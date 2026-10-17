@@ -155,6 +155,8 @@ if INCLUIR_MOTOR:
     op = next(o["id"] for o in e["opcoes"] if o["texto"] == "Impressora")
     s, e = req("POST", f"/api/triagem/{e['idFluxo']}/responder", {"idOpcao": op}, ta)
     check("motor: segue para o cenário novo", e["noAtual"]["pergunta"], "A impressora está ligada?")
+    s, r = req("DELETE", f"{A}/nos/{n1}", token=ta)
+    check("excluir nó usado numa triagem -> 409 com orientação", (s, "Desative" in (r or {}).get("erro", "")), (409, True))
 
 # ---------- Trava de ciclo e de órfão ----------
 s, r = nova_opcao(s1, q, "Voltar")

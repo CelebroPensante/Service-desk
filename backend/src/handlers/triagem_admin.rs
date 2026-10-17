@@ -55,39 +55,85 @@ pub enum ErroAdmin {
     Banco(sqlx::Error),
 }
 
+/// Traduz violações de regra do banco em erros amigáveis. Separada do `From`
+/// para poder ser testada sem um banco de verdade.
+fn erro_de_regra(codigo: Option<&str>, constraint: Option<&str>) -> Option<ErroAdmin> {
+    match constraint.unwrap_or("") {
+        "uq_opcao_texto_por_no" => {
+            return Some(ErroAdmin::Conflito(
+                "Já existe uma opção com esse texto nesta pergunta.".into(),
+            ))
+        }
+        "ck_no_solucao_obrigatoria" => {
+            return Some(ErroAdmin::Invalido(
+                "A sugestão de solução precisa de um texto de solução.".into(),
+            ))
+        }
+        "ck_opcao_origem_nao_terminal" | "fk_opcao_origem" => {
+            return Some(ErroAdmin::Invalido(
+                "Uma etapa final não pode ter opções de resposta.".into(),
+            ))
+        }
+        "ck_opcao_sem_autoreferencia" => {
+            return Some(ErroAdmin::Invalido("Uma opção não pode levar ao próprio nó.".into()))
+        }
+        _ => {}
+    }
+    // 23503 = foreign_key_violation; 23001 = restrict_violation (chave com
+    // ON DELETE RESTRICT: o código que o PostgreSQL usa depende da versão).
+    if matches!(codigo, Some("23503") | Some("23001")) {
+        return Some(ErroAdmin::Conflito(
+            "Este registro já foi usado em triagens e não pode ser excluído. \
+             Desative o nó em vez de excluí-lo."
+                .into(),
+        ));
+    }
+    None
+}
+
 impl From<sqlx::Error> for ErroAdmin {
     fn from(e: sqlx::Error) -> Self {
         if let Some(db) = e.as_database_error() {
-            match db.constraint().unwrap_or("") {
-                "uq_opcao_texto_por_no" => {
-                    return ErroAdmin::Conflito(
-                        "Já existe uma opção com esse texto nesta pergunta.".into(),
-                    )
-                }
-                "ck_no_solucao_obrigatoria" => {
-                    return ErroAdmin::Invalido(
-                        "A sugestão de solução precisa de um texto de solução.".into(),
-                    )
-                }
-                "ck_opcao_origem_nao_terminal" | "fk_opcao_origem" => {
-                    return ErroAdmin::Invalido(
-                        "Uma etapa final não pode ter opções de resposta.".into(),
-                    )
-                }
-                "ck_opcao_sem_autoreferencia" => {
-                    return ErroAdmin::Invalido("Uma opção não pode levar ao próprio nó.".into())
-                }
-                _ => {}
-            }
-            if db.code().as_deref() == Some("23503") {
-                return ErroAdmin::Conflito(
-                    "Este registro já foi usado em triagens e não pode ser excluído. \
-                     Desative o nó em vez de excluí-lo."
-                        .into(),
-                );
+            if let Some(erro) = erro_de_regra(db.code().as_deref(), db.constraint()) {
+                return erro;
             }
         }
         ErroAdmin::Banco(e)
+    }
+}
+
+#[cfg(test)]
+mod testes {
+    use super::*;
+
+    #[test]
+    fn registro_em_uso_vira_conflito_nos_dois_codigos_do_postgres() {
+        // 23001 é o que o PostgreSQL devolve para ON DELETE RESTRICT (o caso do log)
+        for codigo in ["23001", "23503"] {
+            let erro = erro_de_regra(Some(codigo), Some("fluxo_triagem_no_atual_fkey"));
+            assert!(
+                matches!(erro, Some(ErroAdmin::Conflito(m)) if m.contains("Desative")),
+                "código {codigo} deveria virar 409"
+            );
+        }
+    }
+
+    #[test]
+    fn regras_conhecidas_viram_mensagens_especificas() {
+        assert!(matches!(
+            erro_de_regra(Some("23505"), Some("uq_opcao_texto_por_no")),
+            Some(ErroAdmin::Conflito(_))
+        ));
+        assert!(matches!(
+            erro_de_regra(Some("23514"), Some("ck_opcao_origem_nao_terminal")),
+            Some(ErroAdmin::Invalido(_))
+        ));
+    }
+
+    #[test]
+    fn erro_desconhecido_continua_sendo_erro_interno() {
+        assert!(erro_de_regra(Some("42P01"), None).is_none());
+        assert!(erro_de_regra(None, None).is_none());
     }
 }
 
