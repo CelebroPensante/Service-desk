@@ -1,0 +1,29 @@
+# Documentos internos / acadêmicos que não devem ir para o repositório
+TCC.md
+
+# Variáveis de ambiente locais
+.env
+*.env.local
+
+# Dependências e builds
+node_modules/
+target/
+dist/
+uploads/
+
+# Binários compilados (Go / Rust / Windows)
+*.exe
+*.dll
+*.so
+*.dylib
+server-go/bin/
+
+# Arquivos de sistema e editores
+.DS_Store
+Thumbs.db
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
