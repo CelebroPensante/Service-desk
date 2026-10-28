@@ -96,3 +96,63 @@ export interface NivelPermissao {
   nivel: number
   descricao: string
 }
+
+export interface DiscoTelemetria {
+  pontoMontagem: string
+  sistemaArquivos: string
+  totalGb: number
+  livreGb: number
+  usoPercent: number
+}
+
+export interface ProcessoTelemetria {
+  pid: number
+  nome: string
+  cpuUsagePercent: number
+  memoriaMb: number
+}
+
+export interface MachineTelemetry {
+  machineUid: string
+  hostname: string
+  usuarioSo: string
+  osName: string
+  osVersion: string
+  cpuBrand: string
+  cpuCores: number
+  uptimeSeconds: number
+  cpuUsagePercent: number
+  memoriaTotalMb: number
+  memoriaUsadaMb: number
+  memoriaUsoPercent: number
+  swapTotalMb: number
+  swapUsadaMb: number
+  discos: DiscoTelemetria[]
+  topProcessos: ProcessoTelemetria[]
+  statusConexao: 'online' | 'offline' | string
+  ultimoHeartbeat: string
+  coletadoEmUnixMs: number
+}
+
+export interface RelatorioAutoavaliacao {
+  id: number
+  idChamado?: number
+  idMaquina?: number
+  machineUid: string
+  hostname: string
+  usuarioSo: string
+  sistemaOperacional: string
+  versaoSo: string
+  modeloCpu: string
+  nucleosCpu: number
+  uptimeSegundos: number
+  cpuUsagePercent: number
+  memoriaTotalMb: number
+  memoriaUsadaMb: number
+  memoriaUsoPercent: number
+  swapTotalMb: number
+  swapUsadaMb: number
+  discos: DiscoTelemetria[]
+  topProcessos: ProcessoTelemetria[]
+  coletadoEm: string
+}
