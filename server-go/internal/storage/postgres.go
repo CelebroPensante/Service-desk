@@ -146,6 +146,14 @@ func (s *PostgresStore) CriarRelatorioAutoavaliacao(
 		idMaquina = &foundID
 	}
 
+	var validChamadoID *int
+	if idChamado != nil && *idChamado > 0 {
+		var exists bool
+		if err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM chamado WHERE id = $1)`, *idChamado).Scan(&exists); err == nil && exists {
+			validChamadoID = idChamado
+		}
+	}
+
 	const query = `
 		INSERT INTO relatorio_autoavaliacao (
 			id_chamado, id_maquina, machine_uid, hostname, usuario_so,
@@ -166,7 +174,7 @@ func (s *PostgresStore) CriarRelatorioAutoavaliacao(
 	err = s.pool.QueryRow(
 		ctx,
 		query,
-		idChamado,
+		validChamadoID,
 		idMaquina,
 		snap.MachineUID,
 		snap.Hostname,

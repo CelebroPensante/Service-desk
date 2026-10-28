@@ -173,3 +173,47 @@ pub fn collect_snapshot(
         coletado_em_unix_ms: now_unix_ms(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_machine_metadata_detect() {
+        let meta = MachineMetadata::detect();
+        assert!(!meta.machine_uid.is_empty(), "machine_uid não pode ser vazio");
+        assert!(!meta.hostname.is_empty(), "hostname não pode ser vazio");
+        assert!(!meta.os_name.is_empty(), "os_name não pode ser vazio");
+    }
+
+    #[test]
+    fn test_build_heartbeat() {
+        let meta = MachineMetadata::detect();
+        let hb = build_heartbeat(&meta);
+        assert_eq!(hb.machine_uid, meta.machine_uid);
+        assert_eq!(hb.hostname, meta.hostname);
+        assert!(hb.timestamp_unix_ms > 0);
+    }
+
+    #[test]
+    fn test_collect_snapshot_real_system() {
+        let meta = MachineMetadata::detect();
+        let mut sys = System::new_all();
+        sys.refresh_all();
+
+        let snap = collect_snapshot(&mut sys, &meta, true, true, 5);
+        assert_eq!(snap.machine_uid, meta.machine_uid);
+        assert!(snap.cpu_cores >= 1, "deve detectar ao menos 1 núcleo de CPU");
+        assert!(snap.memoria_total_mb > 0, "memória total deve ser maior que zero");
+        assert!(
+            snap.memoria_usada_mb <= snap.memoria_total_mb,
+            "memória usada não deve exceder memória total"
+        );
+        assert!(!snap.discos.is_empty(), "deve listar ao menos 1 disco montado");
+        assert!(
+            snap.top_processos.len() <= 5,
+            "deve respeitar o limite top_n_processos"
+        );
+    }
+}
+

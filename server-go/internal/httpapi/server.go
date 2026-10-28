@@ -38,6 +38,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/telemetria/maquinas/{machine_uid}", s.handleObterMaquina)
 	mux.HandleFunc("GET /api/telemetria/ws", s.handleWebSocket)
 	mux.HandleFunc("GET /api/telemetria/maquinas/{machine_uid}/ws", s.handleWebSocket)
+	mux.HandleFunc("POST /api/telemetria/autoavaliacao", s.handleCriarAutoavaliacaoAvulsa)
 	mux.HandleFunc("POST /api/telemetria/chamados/{id}/relatorio", s.handleCriarRelatorioChamado)
 	mux.HandleFunc("GET /api/telemetria/chamados/{id}/relatorio", s.handleListarRelatoriosChamado)
 
@@ -152,6 +153,29 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 type criarRelatorioBody struct {
 	MachineUID string                   `json:"machineUid"`
 	Snapshot   *hub.MachineTelemetryDTO `json:"snapshot,omitempty"`
+}
+
+func (s *Server) handleCriarAutoavaliacaoAvulsa(w http.ResponseWriter, r *http.Request) {
+	var body criarRelatorioBody
+	_ = json.NewDecoder(r.Body).Decode(&body)
+
+	snap, ok := s.hub.GetMachine(body.MachineUID)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{
+			"erro": "Agente de telemetria não encontrado para capturar a autoavaliação da máquina",
+		})
+		return
+	}
+
+	if s.store != nil {
+		relatorio, err := s.store.CriarRelatorioAutoavaliacao(r.Context(), nil, snap)
+		if err == nil {
+			writeJSON(w, http.StatusCreated, relatorio)
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusCreated, snap)
 }
 
 func (s *Server) handleCriarRelatorioChamado(w http.ResponseWriter, r *http.Request) {
