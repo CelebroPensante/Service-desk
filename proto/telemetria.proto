@@ -1,0 +1,84 @@
+syntax = "proto3";
+
+package telemetria;
+
+option go_package = "servicedesk/server-go/internal/pb;pb";
+
+// Serviço de Telemetria e Autoavaliação da Máquina (Agente Rust <-> Servidor Go / App Desktop)
+service TelemetriaService {
+  // Consulta pontual da telemetria completa (utilizada para diagnóstico imediato / autoavaliação local)
+  rpc ObterTelemetria(TelemetriaRequest) returns (TelemetriaSnapshot);
+
+  // Sinal periódico (Heartbeat) enviado pelo agente para indicar que a estação está online
+  rpc EnviarHeartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+
+  // Stream contínuo em tempo real das métricas da máquina do agente para o servidor central em Go
+  rpc StreamTelemetria(stream TelemetriaSnapshot) returns (StreamControl);
+}
+
+message TelemetriaRequest {
+  bool incluir_processos = 1;
+  bool incluir_discos = 2;
+  uint32 top_n_processos = 3;
+}
+
+message DiscoInfo {
+  string ponto_montagem = 1;
+  string sistema_arquivos = 2;
+  double total_gb = 3;
+  double livre_gb = 4;
+  float uso_percent = 5;
+}
+
+message ProcessoInfo {
+  uint32 pid = 1;
+  string nome = 2;
+  float cpu_usage_percent = 3;
+  uint64 memoria_mb = 4;
+}
+
+message TelemetriaSnapshot {
+  // Identificação da estação e do sistema operacional
+  string machine_uid = 1;
+  string hostname = 2;
+  string usuario_so = 3;
+  string os_name = 4;
+  string os_version = 5;
+  string cpu_brand = 6;
+  uint32 cpu_cores = 7;
+  uint64 uptime_seconds = 8;
+
+  // Métricas de processamento e memória em tempo real
+  float cpu_usage_percent = 9;
+  uint64 memoria_total_mb = 10;
+  uint64 memoria_usada_mb = 11;
+  float memoria_uso_percent = 12;
+  uint64 swap_total_mb = 13;
+  uint64 swap_usada_mb = 14;
+
+  // Armazenamento e processos com maior consumo
+  repeated DiscoInfo discos = 15;
+  repeated ProcessoInfo top_processos = 16;
+
+  // Timestamp da coleta em milissegundos (Unix Epoch)
+  int64 coletado_em_unix_ms = 17;
+}
+
+message HeartbeatRequest {
+  string machine_uid = 1;
+  string hostname = 2;
+  string usuario_so = 3;
+  int64 timestamp_unix_ms = 4;
+}
+
+message HeartbeatResponse {
+  bool ok = 1;
+  int64 server_timestamp_unix_ms = 2;
+  uint32 intervalo_segundos = 3;
+}
+
+message StreamControl {
+  bool aceito = 1;
+  string mensagem = 2;
+  uint32 intervalo_segundos = 3;
+}
