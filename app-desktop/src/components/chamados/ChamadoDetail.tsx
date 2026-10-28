@@ -2,6 +2,7 @@ import type { Chamado } from "../../types";
 import Comentarios from "./Comentarios";
 import Chat from "./Chat";
 import Anexos from "./Anexos";
+import TelemetriaChamadoCard from "./TelemetriaChamadoCard";
 
 interface ChamadoDetailProps {
   chamado: Chamado;
@@ -129,6 +130,9 @@ export default function ChamadoDetail({
             </div>
           </div>
         </div>
+
+        {/* Painel de Relatório de Autoavaliação e Telemetria em Tempo Real */}
+        <TelemetriaChamadoCard idChamado={chamado.id} />
 
         {/* Conteúdo em duas colunas */}
         <div className="mt-6 grid grid-cols-1 lg:grid-cols-5 gap-6">

@@ -1,3 +1,3 @@
 pub mod auth;
 
-pub use auth::{require_auth, require_nivel_minimo};
+pub use auth::require_auth;

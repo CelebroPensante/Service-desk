@@ -12,9 +12,9 @@
   "app": {
     "windows": [
       {
-        "title": "service-desk",
-        "width": 800,
-        "height": 600,
+        "title": "ServiceDesk",
+        "width": 1280,
+        "height": 800,
         "resizable": true,
         "fullscreen": false
       }

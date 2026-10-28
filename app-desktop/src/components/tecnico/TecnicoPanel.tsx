@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { CheckCircle2, Eye, Inbox, Users, Wrench } from 'lucide-react'
+import { Activity, CheckCircle2, Cpu, Eye, Inbox, MemoryStick, Monitor, Users, Wifi, WifiOff, Wrench } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
-import type { Chamado } from '../../types'
+import type { Chamado, MachineTelemetry } from '../../types'
+import { TELEMETRIA_API_URL, TELEMETRIA_WS_URL } from '../../utils/data'
 import PageContainer from '../layout/PageContainer'
 import {
   BADGE,
@@ -47,6 +48,8 @@ const TH = 'px-4 py-3 text-[11px] font-medium uppercase tracking-wide text-slate
 const SELECT =
   'rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand/40 disabled:cursor-not-allowed disabled:opacity-60'
 
+const WS_URL = TELEMETRIA_WS_URL + '/api/telemetria/ws'
+
 interface ResumoProps {
   label: string
   valor: number
@@ -73,6 +76,10 @@ function TecnicoPanel({ chamados, request, onRecarregar, onDetalhe }: TecnicoPan
   const [tecnicos, setTecnicos] = useState<Tecnico[]>([])
   const [erro, setErro] = useState<string | null>(null)
   const [salvandoId, setSalvandoId] = useState<number | null>(null)
+
+  // Telemetria ao vivo das estações monitoradas
+  const [maquinas, setMaquinas] = useState<Record<string, MachineTelemetry>>({})
+  const [wsConectado, setWsConectado] = useState(false)
 
   useEffect(() => {
     let ativo = true
@@ -103,6 +110,63 @@ function TecnicoPanel({ chamados, request, onRecarregar, onDetalhe }: TecnicoPan
     }
   }, [request])
 
+  // Carrega a lista de estações do Servidor Go e assina atualizações via WebSocket
+  useEffect(() => {
+    let cancelado = false
+    let ws: WebSocket | null = null
+
+    async function carregarMaquinasIniciais() {
+      try {
+        const resp = await fetch(`${TELEMETRIA_API_URL}/api/telemetria/maquinas`)
+        if (resp.ok && !cancelado) {
+          const lista = (await resp.json()) as MachineTelemetry[]
+          if (Array.isArray(lista)) {
+            const mapa: Record<string, MachineTelemetry> = {}
+            for (const m of lista) {
+              mapa[m.machineUid] = m
+            }
+            setMaquinas(mapa)
+          }
+        }
+      } catch {
+        // Ignorado se servidor Go não estiver ativo
+      }
+    }
+
+    void carregarMaquinasIniciais()
+
+    try {
+      ws = new WebSocket(WS_URL)
+      ws.onopen = () => {
+        if (!cancelado) setWsConectado(true)
+      }
+      ws.onmessage = (event) => {
+        if (cancelado) return
+        try {
+          const snap = JSON.parse(event.data) as MachineTelemetry
+          if (snap?.machineUid) {
+            setMaquinas((atual) => ({ ...atual, [snap.machineUid]: snap }))
+          }
+        } catch {
+          // Ignora frame inválido
+        }
+      }
+      ws.onclose = () => {
+        if (!cancelado) setWsConectado(false)
+      }
+      ws.onerror = () => {
+        if (!cancelado) setWsConectado(false)
+      }
+    } catch {
+      setWsConectado(false)
+    }
+
+    return () => {
+      cancelado = true
+      if (ws) ws.close()
+    }
+  }, [])
+
   async function salvar(chamado: Chamado, caminho: string, body: object, mensagemErro: string) {
     setErro(null)
     setSalvandoId(chamado.id)
@@ -123,11 +187,12 @@ function TecnicoPanel({ chamados, request, onRecarregar, onDetalhe }: TecnicoPan
   const abertos = status.filter(ESTA_ABERTO).length
   const emAtendimento = status.filter(ESTA_EM_ATENDIMENTO).length
   const finalizados = status.filter(ESTA_FINALIZADO).length
+  const listaMaquinas = Object.values(maquinas)
 
   return (
     <PageContainer
       titulo="Painel do Técnico"
-      subtitulo="Gerencie todos os chamados, atribuições e status."
+      subtitulo="Gerencie todos os chamados, atribuições, status e monitore estações em tempo real."
     >
       <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
         <Resumo label="Total" valor={chamados.length} icon={Users} cor="bg-slate-100 text-slate-600" />
@@ -135,6 +200,102 @@ function TecnicoPanel({ chamados, request, onRecarregar, onDetalhe }: TecnicoPan
         <Resumo label="Em atendimento" valor={emAtendimento} icon={Wrench} cor="bg-blue-50 text-blue-600" />
         <Resumo label="Finalizados" valor={finalizados} icon={CheckCircle2} cor="bg-emerald-50 text-emerald-600" />
       </div>
+
+      {/* Monitoramento Ao Vivo das Estações Conectadas via Agente Rust -> Servidor Go */}
+      <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
+              <Activity size={16} />
+            </div>
+            <div>
+              <h2 className="text-sm font-bold text-slate-900">
+                Estações Monitoradas em Tempo Real ({listaMaquinas.length})
+              </h2>
+              <p className="text-xs text-slate-500">
+                Stream gRPC recebido dos Agentes em Rust pelo Servidor Go On-Premise.
+              </p>
+            </div>
+          </div>
+          <span
+            className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium border ${
+              wsConectado
+                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                : 'bg-slate-100 text-slate-600 border-slate-200'
+            }`}
+          >
+            {wsConectado ? <Wifi size={12} /> : <WifiOff size={12} />}
+            {wsConectado ? 'Servidor Go Conectado' : 'Servidor Go Desconectado'}
+          </span>
+        </div>
+
+        {listaMaquinas.length === 0 ? (
+          <p className="mt-4 rounded-xl bg-slate-50 px-4 py-3 text-xs text-slate-500">
+            Nenhuma estação conectada no momento. Inicie o Servidor Go (<code>porta 50051/8081</code>) e o Agente Rust para visualizar a telemetria ao vivo.
+          </p>
+        ) : (
+          <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {listaMaquinas.map((m) => {
+              const online = m.statusConexao === 'online'
+              return (
+                <div
+                  key={m.machineUid}
+                  className="rounded-xl border border-slate-200 bg-slate-50/70 p-4"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Monitor size={16} className="text-slate-700" />
+                      <div>
+                        <p className="text-sm font-bold text-slate-900">{m.hostname}</p>
+                        <p className="text-[11px] text-slate-500">
+                          {m.usuarioSo} • {m.osName} {m.osVersion}
+                        </p>
+                      </div>
+                    </div>
+                    <span
+                      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                        online
+                          ? 'bg-emerald-100 text-emerald-700'
+                          : 'bg-red-100 text-red-700'
+                      }`}
+                    >
+                      <span
+                        className={`h-1.5 w-1.5 rounded-full ${
+                          online ? 'bg-emerald-500' : 'bg-red-500'
+                        }`}
+                      />
+                      {online ? 'Online' : 'Offline'}
+                    </span>
+                  </div>
+
+                  <p className="mt-2 truncate text-[11px] text-slate-500">
+                    {m.cpuBrand} ({m.cpuCores} núcleos)
+                  </p>
+
+                  <div className="mt-3 grid grid-cols-2 gap-2.5">
+                    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                      <span className="flex items-center gap-1 text-[11px] text-slate-500">
+                        <Cpu size={12} className="text-blue-600" /> CPU
+                      </span>
+                      <p className="mt-0.5 text-sm font-bold text-slate-900">
+                        {m.cpuUsagePercent.toFixed(1)}%
+                      </p>
+                    </div>
+                    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                      <span className="flex items-center gap-1 text-[11px] text-slate-500">
+                        <MemoryStick size={12} className="text-indigo-600" /> RAM
+                      </span>
+                      <p className="mt-0.5 text-sm font-bold text-slate-900">
+                        {m.memoriaUsadaMb} / {m.memoriaTotalMb} MB
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </section>
 
       {erro && <p className="mt-6 rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{erro}</p>}
 

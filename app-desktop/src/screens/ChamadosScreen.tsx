@@ -22,9 +22,7 @@ import CargosPermissoes from "../components/admin/CargosPermissoes";
 import TriagemPanel from "../components/triagem/TriagemPanel";
 import RelatoriosPanel from "../components/relatorios/RelatoriosPanel";
 import FluxosTriagem from "../components/admin/FluxosTriagem";
-
-const API_URL = "http://localhost:8080";
-export const TELEMETRIA_API_URL = "http://localhost:8081";
+import { API_URL, TELEMETRIA_API_URL } from "../utils/data";
 
 // NOVO: "dashboard" é a tela inicial agora
 type Modo =
