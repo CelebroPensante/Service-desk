@@ -7,6 +7,7 @@ interface ChamadoDetailProps {
   chamado: Chamado;
   token: string;
   idUsuarioLogado: number;
+  nivelAcesso?: number;
   onBack: () => void;
   onEdit: (chamado: Chamado) => void;
   onDelete: (chamado: Chamado) => void;

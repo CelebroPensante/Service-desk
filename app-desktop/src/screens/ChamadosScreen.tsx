@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from
 import type {
   CategoriaResumo,
   Chamado,
+  MachineTelemetry,
   PrioridadeResumo,
   SetorResumo,
   Usuario,
@@ -23,6 +24,8 @@ import RelatoriosPanel from "../components/relatorios/RelatoriosPanel";
 import FluxosTriagem from "../components/admin/FluxosTriagem";
 
 const API_URL = "http://localhost:8080";
+export const TELEMETRIA_API_URL = "http://localhost:8081";
+
 // NOVO: "dashboard" é a tela inicial agora
 type Modo =
   | "dashboard"
@@ -80,6 +83,11 @@ function ChamadosScreen({ usuario, token, onSair }: ChamadosScreenProps) {
   const [erro, setErro] = useState<string | null>(null);
   // NOVO: erros de carga (categorias, prioridades, chamados), separados do erro de ações
   const [erroDados, setErroDados] = useState<string | null>(null);
+
+  // Estado da Autoavaliação da Máquina (coletada via Agente Rust -> Servidor Go)
+  const [autoavaliacao, setAutoavaliacao] = useState<MachineTelemetry | null>(null);
+  const [gerandoAutoavaliacao, setGerandoAutoavaliacao] = useState(false);
+  const [erroAutoavaliacao, setErroAutoavaliacao] = useState<string | null>(null);
 
   // useCallback: a função só muda se o token mudar (o TecnicoPanel depende disso)
   const request = useCallback(
@@ -147,11 +155,38 @@ function ChamadosScreen({ usuario, token, onSair }: ChamadosScreenProps) {
     void carregarDados();
   }, []);
 
+  async function gerarAutoavaliacao() {
+    setGerandoAutoavaliacao(true);
+    setErroAutoavaliacao(null);
+    try {
+      const resp = await fetch(`${TELEMETRIA_API_URL}/api/telemetria/maquinas/atual`);
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => null);
+        throw new Error(
+          body?.erro ??
+            "Não foi possível coletar a autoavaliação. Verifique se o Agente Rust e o Servidor Go estão em execução.",
+        );
+      }
+      const snap = (await resp.json()) as MachineTelemetry;
+      setAutoavaliacao(snap);
+    } catch (e) {
+      setErroAutoavaliacao(
+        e instanceof Error
+          ? e.message
+          : "Falha ao conectar ao servidor de telemetria (porta 8081).",
+      );
+    } finally {
+      setGerandoAutoavaliacao(false);
+    }
+  }
+
   function abrirNovo() {
     setSelecionado(null);
     setForm(FORM_VAZIO);
     setErro(null);
     setTriagemOrigem(null);
+    setAutoavaliacao(null);
+    setErroAutoavaliacao(null);
     setTriagemAtiva(true);
     setModo("novo");
   }
@@ -218,12 +253,27 @@ function ChamadosScreen({ usuario, token, onSair }: ChamadosScreenProps) {
       if (modo === "editar" && selecionado) {
         await request<Chamado>(`/api/chamados/${selecionado.id}`, { method: "PUT", body });
       } else {
-        await request<Chamado>("/api/chamados", { method: "POST", body });
+        const novoChamado = await request<Chamado>("/api/chamados", { method: "POST", body });
+        // Se o usuário gerou a autoavaliação da máquina, vincula o relatório técnico ao chamado recém-criado
+        if (autoavaliacao && novoChamado?.id) {
+          await fetch(`${TELEMETRIA_API_URL}/api/telemetria/chamados/${novoChamado.id}/relatorio`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              machineUid: autoavaliacao.machineUid,
+              snapshot: autoavaliacao,
+            }),
+          }).catch((err) => {
+            console.warn("Aviso: chamado criado, mas não foi possível anexar relatório de telemetria:", err);
+          });
+        }
       }
       await carregarChamados();
       setSelecionado(null);
       setForm(FORM_VAZIO);
       setTriagemOrigem(null);
+      setAutoavaliacao(null);
+      setErroAutoavaliacao(null);
       setModo("lista");
     } catch (e) {
       setErro(e instanceof Error ? e.message : "Não foi possível salvar o chamado.");
@@ -381,8 +431,15 @@ function ChamadosScreen({ usuario, token, onSair }: ChamadosScreenProps) {
         onChange={alterarCampo}
         onCancel={() => {
           setTriagemOrigem(null);
+          setAutoavaliacao(null);
+          setErroAutoavaliacao(null);
           setModo("lista");
         }}
+        onGerarAutoavaliacao={() => void gerarAutoavaliacao()}
+        gerandoAutoavaliacao={gerandoAutoavaliacao}
+        autoavaliacao={autoavaliacao}
+        erroAutoavaliacao={erroAutoavaliacao}
+        onRemoverAutoavaliacao={() => setAutoavaliacao(null)}
       />,
     );
   }
@@ -393,6 +450,7 @@ function ChamadosScreen({ usuario, token, onSair }: ChamadosScreenProps) {
         chamado={selecionado}
         token={token}
         idUsuarioLogado={usuario.id}
+        nivelAcesso={usuario.nivelAcesso}
         onBack={() => setModo("lista")}
         onEdit={abrirEdicao}
         onDelete={(chamado) => void excluirChamado(chamado)}

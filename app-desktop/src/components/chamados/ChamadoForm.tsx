@@ -1,6 +1,6 @@
 import { useEffect, type FormEvent } from 'react'
-import { Lock, Send, Sparkles, Wand2 } from 'lucide-react'
-import type { CategoriaResumo, PrioridadeResumo, SetorResumo } from '../../types'
+import { CheckCircle2, Cpu, HardDrive, Lock, MemoryStick, RefreshCw, Send, Sparkles, Trash2, Wand2 } from 'lucide-react'
+import type { CategoriaResumo, MachineTelemetry, PrioridadeResumo, SetorResumo } from '../../types'
 import { normalizar } from './ChamadoUi'
 
 export interface ChamadoFormData {
@@ -28,9 +28,11 @@ interface ChamadoFormProps {
   onSubmit: (event: FormEvent) => void
   onChange: (campo: keyof ChamadoFormData, valor: string) => void
   onCancel: () => void
-  // Ainda não existe a coleta de dados da máquina. Quando existir, passe a função aqui
-  // e o botão "Gerar autoavaliação" passa a funcionar. Sem ela, o botão fica desativado.
   onGerarAutoavaliacao?: () => void
+  gerandoAutoavaliacao?: boolean
+  autoavaliacao?: MachineTelemetry | null
+  erroAutoavaliacao?: string | null
+  onRemoverAutoavaliacao?: () => void
 }
 
 const LABEL = 'mb-1.5 block text-[13px] font-semibold text-slate-900'
@@ -54,6 +56,10 @@ function ChamadoForm({
   onChange,
   onCancel,
   onGerarAutoavaliacao,
+  gerandoAutoavaliacao = false,
+  autoavaliacao = null,
+  erroAutoavaliacao = null,
+  onRemoverAutoavaliacao,
 }: ChamadoFormProps) {
   const editando = modo === 'editar'
 
@@ -180,25 +186,102 @@ function ChamadoForm({
         )}
 
         {!editando && (
-          <div className="mt-5 flex items-center justify-between gap-4 rounded-xl border border-dashed border-blue-300 bg-blue-50/60 px-4 py-4">
-            <div>
-              <p className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-                <Sparkles size={16} className="text-brand" />
-                Autoavaliação da máquina
-              </p>
-              <p className="mt-1 text-xs text-slate-600">
-                Anexa um relatório técnico automático ao chamado.
-              </p>
+          <div className="mt-5 rounded-xl border border-dashed border-blue-300 bg-blue-50/60 px-4 py-4">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <p className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                  <Sparkles size={16} className="text-brand" />
+                  Autoavaliação da máquina
+                  {autoavaliacao && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-700">
+                      <CheckCircle2 size={12} /> Pronta para anexar
+                    </span>
+                  )}
+                </p>
+                <p className="mt-1 text-xs text-slate-600">
+                  Coleta automaticamente métricas de CPU, memória RAM, discos e processos via Agente Rust/gRPC.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                {autoavaliacao && onRemoverAutoavaliacao && (
+                  <button
+                    type="button"
+                    onClick={onRemoverAutoavaliacao}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600 transition hover:bg-slate-100"
+                  >
+                    <Trash2 size={14} />
+                    Remover
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={onGerarAutoavaliacao}
+                  disabled={!onGerarAutoavaliacao || gerandoAutoavaliacao}
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-brand bg-white px-4 py-2 text-sm font-medium text-brand transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <RefreshCw size={14} className={gerandoAutoavaliacao ? 'animate-spin' : ''} />
+                  {gerandoAutoavaliacao
+                    ? 'Coletando...'
+                    : autoavaliacao
+                      ? 'Atualizar autoavaliação'
+                      : 'Gerar autoavaliação'}
+                </button>
+              </div>
             </div>
-            <button
-              type="button"
-              onClick={onGerarAutoavaliacao}
-              disabled={!onGerarAutoavaliacao}
-              title={onGerarAutoavaliacao ? undefined : 'Em breve'}
-              className="shrink-0 rounded-lg border border-brand bg-white px-4 py-2 text-sm font-medium text-brand transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-white"
-            >
-              Gerar autoavaliação
-            </button>
+
+            {erroAutoavaliacao && (
+              <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                {erroAutoavaliacao}
+              </p>
+            )}
+
+            {autoavaliacao && (
+              <div className="mt-4 rounded-xl border border-blue-200 bg-white p-4 shadow-xs">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3 text-xs text-slate-600">
+                  <span>
+                    Estação: <strong className="text-slate-900">{autoavaliacao.hostname}</strong> ({autoavaliacao.osName} {autoavaliacao.osVersion})
+                  </span>
+                  <span>
+                    Usuário SO: <strong className="text-slate-900">{autoavaliacao.usuarioSo}</strong>
+                  </span>
+                  <span>
+                    Processador: <strong className="text-slate-900">{autoavaliacao.cpuBrand}</strong> ({autoavaliacao.cpuCores} núcleos)
+                  </span>
+                </div>
+
+                <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <div className="flex items-center gap-3 rounded-lg bg-slate-50 px-3 py-2.5">
+                    <Cpu size={18} className="text-blue-600" />
+                    <div>
+                      <p className="text-[11px] text-slate-500">Uso de CPU</p>
+                      <p className="text-sm font-bold text-slate-900">
+                        {autoavaliacao.cpuUsagePercent.toFixed(1)}%
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3 rounded-lg bg-slate-50 px-3 py-2.5">
+                    <MemoryStick size={18} className="text-indigo-600" />
+                    <div>
+                      <p className="text-[11px] text-slate-500">Memória RAM</p>
+                      <p className="text-sm font-bold text-slate-900">
+                        {autoavaliacao.memoriaUsadaMb} / {autoavaliacao.memoriaTotalMb} MB ({autoavaliacao.memoriaUsoPercent.toFixed(0)}%)
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3 rounded-lg bg-slate-50 px-3 py-2.5">
+                    <HardDrive size={18} className="text-emerald-600" />
+                    <div>
+                      <p className="text-[11px] text-slate-500">Discos / Processos</p>
+                      <p className="text-sm font-bold text-slate-900">
+                        {autoavaliacao.discos.length} disco(s) • Top {autoavaliacao.topProcessos.length} proc.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
