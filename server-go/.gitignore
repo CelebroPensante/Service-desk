@@ -1,0 +1,6 @@
+# Binários compilados
+bin/
+*.exe
+
+# Variáveis de ambiente locais
+.env
