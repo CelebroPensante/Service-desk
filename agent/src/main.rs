@@ -3,6 +3,7 @@ pub mod telemetria {
 }
 
 mod collector;
+mod remote;
 
 use std::{
     sync::{Arc, Mutex},
@@ -218,6 +219,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         metadata.os_name,
         metadata.os_version
     );
+
+    remote::start();
 
     // 1. Inicia envio periódico de Heartbeat ao servidor Go
     tokio::spawn(loop_heartbeat_remoto(
