@@ -7,11 +7,6 @@ import AuthSubmitButton from './components/auth/AuthSubmitButton'
 
 const API_URL = 'http://localhost:8080'
 
-const STATS = [
-  { valor: '1.2k+', label: 'Chamados/mês' },
-  { valor: '98%', label: 'Satisfação' },
-  { valor: '<2h', label: 'Tempo médio' },
-]
 
 interface LoginScreenProps {
   onLoginSuccess: (usuario: Usuario, token: string) => void
@@ -58,7 +53,6 @@ function LoginScreen({ onLoginSuccess, onIrParaCadastro, onIrParaEsqueciSenha }:
     <AuthLayout
       heroTitle="Suporte técnico organizado, rápido e rastreável."
       heroDescription="Centralize chamados, acompanhe status em tempo real e resolva incidentes com autoavaliação automática da máquina."
-      stats={STATS}
     >
       <form onSubmit={handleSubmit} className="w-full max-w-sm">
           <h2 className="text-2xl font-semibold text-black">Bem-vindo de volta</h2>
