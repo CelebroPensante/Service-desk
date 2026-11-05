@@ -49,6 +49,8 @@ func setup(t *testing.T) (*Server, *httptest.Server, *memoryRepo) {
 			return User{ID: 3, Level: 1, Expires: time.Now().Add(time.Hour)}, nil
 		case "tech2":
 			return User{ID: 4, Level: 2, Expires: time.Now().Add(time.Hour)}, nil
+		case "admin":
+			return User{ID: 5, Level: 5, Name: "Admin", Expires: time.Now().Add(time.Hour)}, nil
 		}
 		return User{}, errors.New("invalid token")
 	}
@@ -303,5 +305,75 @@ func TestSharingWaitsForTechnicianConnection(t *testing.T) {
 	send(t, owner, Message{Type: "share"})
 	if !receive(t, owner, "state").Session.Sharing {
 		t.Fatal("share rejected after readiness")
+	}
+}
+
+func TestDirectMachineAccessAndPasswordUpdate(t *testing.T) {
+	_, srv, _ := setup(t)
+	code := strings.Repeat("d", 32)
+	agent, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http")+"/api/remoto/agente/ws", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer agent.Close()
+
+	send(t, agent, Message{
+		Type:       "register",
+		PairCode:   code,
+		MachineUID: "estacao-01",
+		Hostname:   "PC-FINANCEIRO",
+		Password:   "SENHA123",
+		Monitors: []MonitorInfo{
+			{ID: 0, Name: "Monitor 1", Width: 1920, Height: 1080, Primary: true},
+			{ID: 1, Name: "Monitor 2", X: 1920, Width: 1920, Height: 1080, Primary: false},
+		},
+	})
+	receive(t, agent, "registered")
+
+	// 1. Senha incorreta deve retornar 403
+	reqBad, _ := http.NewRequest("POST", srv.URL+"/api/remoto/maquinas/estacao-01", strings.NewReader(`{"password":"ERRADA"}`))
+	reqBad.Header.Set("Authorization", "Bearer tech")
+	resBad, err := http.DefaultClient.Do(reqBad)
+	if err != nil || resBad.StatusCode != 403 {
+		t.Fatalf("expected 403 on wrong password, got %v", resBad)
+	}
+
+	// 2. Senha correta inicia sessão direta e envia grant automático ao agente
+	reqOk, _ := http.NewRequest("POST", srv.URL+"/api/remoto/maquinas/estacao-01", strings.NewReader(`{"password":"SENHA123"}`))
+	reqOk.Header.Set("Authorization", "Bearer tech")
+	resOk, err := http.DefaultClient.Do(reqOk)
+	if err != nil || resOk.StatusCode != 201 {
+		t.Fatalf("expected 201 on valid password, got %v", resOk)
+	}
+	grant := receive(t, agent, "grant")
+	send(t, agent, Message{Type: "ready", SessionID: grant.SessionID, ActiveMonitor: 0})
+
+	// 3. Técnico conecta no WS da estação, troca de monitor e envia input
+	h := http.Header{}
+	h.Set("Origin", "http://localhost:5173")
+	techWS, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http")+"/api/remoto/maquinas/estacao-01/ws", h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer techWS.Close()
+	send(t, techWS, Message{Type: "auth", Token: "tech"})
+	receive(t, techWS, "state")
+
+	send(t, techWS, Message{Type: "select_monitor", MonitorID: 1})
+	sel := receive(t, agent, "select_monitor")
+	if sel.MonitorID != 1 {
+		t.Fatalf("expected monitor 1, got %d", sel.MonitorID)
+	}
+
+	// 4. ADM altera a senha da máquina remotamente
+	reqPass, _ := http.NewRequest("PUT", srv.URL+"/api/remoto/maquinas/estacao-01/senha", strings.NewReader(`{"password":"NOVA2026"}`))
+	reqPass.Header.Set("Authorization", "Bearer admin")
+	resPass, err := http.DefaultClient.Do(reqPass)
+	if err != nil || resPass.StatusCode != 200 {
+		t.Fatalf("expected 200 on admin password update, got %v", resPass)
+	}
+	setPass := receive(t, agent, "set_password")
+	if setPass.Password != "NOVA2026" {
+		t.Fatalf("expected NOVA2026, got %s", setPass.Password)
 	}
 }

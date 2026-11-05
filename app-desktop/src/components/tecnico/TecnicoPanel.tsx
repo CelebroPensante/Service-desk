@@ -1,9 +1,25 @@
 import { useEffect, useState } from 'react'
-import { Activity, CheckCircle2, Cpu, Eye, Inbox, MemoryStick, Monitor, Users, Wifi, WifiOff, Wrench } from 'lucide-react'
+import {
+  Activity,
+  CheckCircle2,
+  Cpu,
+  Eye,
+  Inbox,
+  KeyRound,
+  MemoryStick,
+  Monitor,
+  ScreenShare,
+  Users,
+  Wifi,
+  WifiOff,
+  Wrench,
+} from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { Chamado, MachineTelemetry } from '../../types'
 import { TELEMETRIA_API_URL, TELEMETRIA_WS_URL } from '../../utils/data'
 import PageContainer from '../layout/PageContainer'
+import AcessoRemoto from '../chamados/AcessoRemoto'
+import type { AgentStatus } from '../chamados/useRemoteAccess'
 import {
   BADGE,
   ESTA_ABERTO,
@@ -28,7 +44,6 @@ interface Tecnico {
   nome: string
 }
 
-// Campos do chamado usados só aqui (o backend envia em camelCase)
 interface CamposTecnico {
   idStatus?: number
   idAtendente?: number | null
@@ -42,6 +57,9 @@ interface TecnicoPanelProps {
   request: Request
   onRecarregar: () => Promise<void>
   onDetalhe: (id: number) => void
+  token?: string
+  userId?: number
+  nivelAcesso?: number
 }
 
 const TH = 'px-4 py-3 text-[11px] font-medium uppercase tracking-wide text-slate-500'
@@ -71,7 +89,15 @@ function Resumo({ label, valor, icon: Icon, cor }: ResumoProps) {
   )
 }
 
-function TecnicoPanel({ chamados, request, onRecarregar, onDetalhe }: TecnicoPanelProps) {
+function TecnicoPanel({
+  chamados,
+  request,
+  onRecarregar,
+  onDetalhe,
+  token = '',
+  userId = 0,
+  nivelAcesso = 2,
+}: TecnicoPanelProps) {
   const [statusOpcoes, setStatusOpcoes] = useState<StatusOpcao[]>([])
   const [tecnicos, setTecnicos] = useState<Tecnico[]>([])
   const [erro, setErro] = useState<string | null>(null)
@@ -79,7 +105,14 @@ function TecnicoPanel({ chamados, request, onRecarregar, onDetalhe }: TecnicoPan
 
   // Telemetria ao vivo das estações monitoradas
   const [maquinas, setMaquinas] = useState<Record<string, MachineTelemetry>>({})
+  const [agentesRemotos, setAgentesRemotos] = useState<Record<string, AgentStatus>>({})
   const [wsConectado, setWsConectado] = useState(false)
+
+  // Estação selecionada para Acesso Remoto direto pelo Painel Técnico (Ponto 2)
+  const [estacaoRemotaAtiva, setEstacaoRemotaAtiva] = useState<{
+    machineUid: string
+    hostname: string
+  } | null>(null)
 
   useEffect(() => {
     let ativo = true
@@ -115,7 +148,7 @@ function TecnicoPanel({ chamados, request, onRecarregar, onDetalhe }: TecnicoPan
     let cancelado = false
     let ws: WebSocket | null = null
 
-    async function carregarMaquinasIniciais() {
+    async function carregarMaquinasEAgentes() {
       try {
         const resp = await fetch(`${TELEMETRIA_API_URL}/api/telemetria/maquinas`)
         if (resp.ok && !cancelado) {
@@ -131,9 +164,30 @@ function TecnicoPanel({ chamados, request, onRecarregar, onDetalhe }: TecnicoPan
       } catch {
         // Ignorado se servidor Go não estiver ativo
       }
+
+      if (token) {
+        try {
+          const respRemoto = await fetch(`${TELEMETRIA_API_URL}/api/remoto/maquinas`, {
+            headers: { Authorization: `Bearer ${token}` },
+          })
+          if (respRemoto.ok && !cancelado) {
+            const listaAgentes = (await respRemoto.json()) as AgentStatus[]
+            if (Array.isArray(listaAgentes)) {
+              const mapaAg: Record<string, AgentStatus> = {}
+              for (const ag of listaAgentes) {
+                mapaAg[ag.machineUid] = ag
+              }
+              setAgentesRemotos(mapaAg)
+            }
+          }
+        } catch {
+          // Ignorado
+        }
+      }
     }
 
-    void carregarMaquinasIniciais()
+    void carregarMaquinasEAgentes()
+    const timer = setInterval(() => void carregarMaquinasEAgentes(), 4000)
 
     try {
       ws = new WebSocket(WS_URL)
@@ -163,9 +217,10 @@ function TecnicoPanel({ chamados, request, onRecarregar, onDetalhe }: TecnicoPan
 
     return () => {
       cancelado = true
+      clearInterval(timer)
       if (ws) ws.close()
     }
-  }, [])
+  }, [token])
 
   async function salvar(chamado: Chamado, caminho: string, body: object, mensagemErro: string) {
     setErro(null)
@@ -187,12 +242,16 @@ function TecnicoPanel({ chamados, request, onRecarregar, onDetalhe }: TecnicoPan
   const abertos = status.filter(ESTA_ABERTO).length
   const emAtendimento = status.filter(ESTA_EM_ATENDIMENTO).length
   const finalizados = status.filter(ESTA_FINALIZADO).length
-  const listaMaquinas = Object.values(maquinas)
+
+  // Combina estações de telemetria + agentes remotos conectados
+  const todosUids = Array.from(
+    new Set([...Object.keys(maquinas), ...Object.keys(agentesRemotos)]),
+  )
 
   return (
     <PageContainer
       titulo="Painel do Técnico"
-      subtitulo="Gerencie todos os chamados, atribuições, status e monitore estações em tempo real."
+      subtitulo="Gerencie todos os chamados, atribuições, status, monitore estações e realize Acesso Remoto direto."
     >
       <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
         <Resumo label="Total" valor={chamados.length} icon={Users} cor="bg-slate-100 text-slate-600" />
@@ -201,7 +260,19 @@ function TecnicoPanel({ chamados, request, onRecarregar, onDetalhe }: TecnicoPan
         <Resumo label="Finalizados" valor={finalizados} icon={CheckCircle2} cor="bg-emerald-50 text-emerald-600" />
       </div>
 
-      {/* Monitoramento Ao Vivo das Estações Conectadas via Agente Rust -> Servidor Go */}
+      {/* Console de Acesso Remoto Direto da Estação Selecionada (Ponto 2) */}
+      {estacaoRemotaAtiva && token && (
+        <AcessoRemoto
+          machineUid={estacaoRemotaAtiva.machineUid}
+          hostname={estacaoRemotaAtiva.hostname}
+          token={token}
+          userId={userId}
+          level={nivelAcesso}
+          onClose={() => setEstacaoRemotaAtiva(null)}
+        />
+      )}
+
+      {/* Monitoramento Ao Vivo das Estações Conectadas + Acesso Remoto Direto */}
       <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2.5">
@@ -210,10 +281,10 @@ function TecnicoPanel({ chamados, request, onRecarregar, onDetalhe }: TecnicoPan
             </div>
             <div>
               <h2 className="text-sm font-bold text-slate-900">
-                Estações Monitoradas em Tempo Real ({listaMaquinas.length})
+                Estações Monitoradas em Tempo Real ({todosUids.length})
               </h2>
               <p className="text-xs text-slate-500">
-                Stream gRPC recebido dos Agentes em Rust pelo Servidor Go On-Premise.
+                Stream gRPC e Controle Remoto via Agente em Rust conectado ao Servidor Go.
               </p>
             </div>
           </div>
@@ -229,26 +300,37 @@ function TecnicoPanel({ chamados, request, onRecarregar, onDetalhe }: TecnicoPan
           </span>
         </div>
 
-        {listaMaquinas.length === 0 ? (
+        {todosUids.length === 0 ? (
           <p className="mt-4 rounded-xl bg-slate-50 px-4 py-3 text-xs text-slate-500">
-            Nenhuma estação conectada no momento. Inicie o Servidor Go (<code>porta 50051/8081</code>) e o Agente Rust para visualizar a telemetria ao vivo.
+            Nenhuma estação conectada no momento. Inicie o Servidor Go (<code>porta 50051/8081</code>) e o Agente Rust para visualizar a telemetria e acessar máquinas remotamente.
           </p>
         ) : (
           <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {listaMaquinas.map((m) => {
-              const online = m.statusConexao === 'online'
+            {todosUids.map((uid) => {
+              const m = maquinas[uid]
+              const ag = agentesRemotos[uid]
+              const online = m?.statusConexao === 'online' || !!ag?.online
+              const hostname = m?.hostname || ag?.hostname || uid
+              const isSelected = estacaoRemotaAtiva?.machineUid === uid
+
               return (
                 <div
-                  key={m.machineUid}
-                  className="rounded-xl border border-slate-200 bg-slate-50/70 p-4"
+                  key={uid}
+                  className={`rounded-xl border p-4 transition ${
+                    isSelected
+                      ? 'border-blue-500 bg-blue-50/30 ring-2 ring-blue-500/20'
+                      : 'border-slate-200 bg-slate-50/70'
+                  }`}
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex items-center gap-2">
                       <Monitor size={16} className="text-slate-700" />
                       <div>
-                        <p className="text-sm font-bold text-slate-900">{m.hostname}</p>
+                        <p className="text-sm font-bold text-slate-900">{hostname}</p>
                         <p className="text-[11px] text-slate-500">
-                          {m.usuarioSo} • {m.osName} {m.osVersion}
+                          {m
+                            ? `${m.usuarioSo} • ${m.osName} ${m.osVersion}`
+                            : `UID: ${uid}`}
                         </p>
                       </div>
                     </div>
@@ -268,27 +350,68 @@ function TecnicoPanel({ chamados, request, onRecarregar, onDetalhe }: TecnicoPan
                     </span>
                   </div>
 
-                  <p className="mt-2 truncate text-[11px] text-slate-500">
-                    {m.cpuBrand} ({m.cpuCores} núcleos)
-                  </p>
+                  {m && (
+                    <>
+                      <p className="mt-2 truncate text-[11px] text-slate-500">
+                        {m.cpuBrand} ({m.cpuCores} núcleos)
+                      </p>
 
-                  <div className="mt-3 grid grid-cols-2 gap-2.5">
-                    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
-                      <span className="flex items-center gap-1 text-[11px] text-slate-500">
-                        <Cpu size={12} className="text-blue-600" /> CPU
+                      <div className="mt-3 grid grid-cols-2 gap-2.5">
+                        <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                          <span className="flex items-center gap-1 text-[11px] text-slate-500">
+                            <Cpu size={12} className="text-blue-600" /> CPU
+                          </span>
+                          <p className="mt-0.5 text-sm font-bold text-slate-900">
+                            {m.cpuUsagePercent.toFixed(1)}%
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                          <span className="flex items-center gap-1 text-[11px] text-slate-500">
+                            <MemoryStick size={12} className="text-indigo-600" /> RAM
+                          </span>
+                          <p className="mt-0.5 text-sm font-bold text-slate-900">
+                            {m.memoriaUsadaMb} / {m.memoriaTotalMb} MB
+                          </p>
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {/* Barra de Acesso Remoto Direto na Estação (Pontos 2 e 3) */}
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-200/80 pt-3">
+                    {nivelAcesso >= 3 && ag?.password ? (
+                      <span
+                        className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-1 font-mono text-[11px] font-semibold text-amber-900 border border-amber-200"
+                        title="Senha de acesso remoto salva no Registro do Windows desta estação"
+                      >
+                        <KeyRound size={11} className="text-amber-600" />
+                        Senha: {ag.password}
                       </span>
-                      <p className="mt-0.5 text-sm font-bold text-slate-900">
-                        {m.cpuUsagePercent.toFixed(1)}%
-                      </p>
-                    </div>
-                    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
-                      <span className="flex items-center gap-1 text-[11px] text-slate-500">
-                        <MemoryStick size={12} className="text-indigo-600" /> RAM
+                    ) : (
+                      <span className="text-[11px] text-slate-500">
+                        {ag?.online
+                          ? `Agente Remoto Pronto (${ag.monitors?.length || 1} tela(s))`
+                          : 'Agente Remoto aguardando'}
                       </span>
-                      <p className="mt-0.5 text-sm font-bold text-slate-900">
-                        {m.memoriaUsadaMb} / {m.memoriaTotalMb} MB
-                      </p>
-                    </div>
+                    )}
+
+                    <button
+                      type="button"
+                      disabled={!online}
+                      onClick={() =>
+                        setEstacaoRemotaAtiva(
+                          isSelected ? null : { machineUid: uid, hostname },
+                        )
+                      }
+                      className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition disabled:opacity-50 ${
+                        isSelected
+                          ? 'bg-slate-800 text-white hover:bg-slate-900'
+                          : 'bg-blue-600 text-white hover:bg-blue-700'
+                      }`}
+                    >
+                      <ScreenShare size={13} />
+                      {isSelected ? 'Fechar Console' : 'Acessar Máquina'}
+                    </button>
                   </div>
                 </div>
               )

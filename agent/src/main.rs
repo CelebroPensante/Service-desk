@@ -220,7 +220,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         metadata.os_version
     );
 
-    remote::start();
+    remote::start(
+        metadata.machine_uid.clone(),
+        metadata.hostname.clone(),
+        &server_go_url,
+    );
 
     // 1. Inicia envio periódico de Heartbeat ao servidor Go
     tokio::spawn(loop_heartbeat_remoto(
