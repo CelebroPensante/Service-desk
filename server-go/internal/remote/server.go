@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -109,7 +110,7 @@ func (s *Server) configuration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ice := s.ice
-	if ice == nil {
+	if ice == nil || (reflect.ValueOf(ice).Kind() == reflect.Slice && reflect.ValueOf(ice).IsNil()) {
 		ice = []any{}
 	}
 	respond(w, 200, map[string]any{"iceServers": ice})
@@ -179,16 +180,7 @@ func (s *Server) record(v *Session, user int, action string) bool {
 	return err == nil
 }
 func (s *Server) allowed(r *http.Request) bool {
-	origin := r.Header.Get("Origin")
-	if origin == "" {
-		return true
-	}
-	for _, o := range strings.Split(s.origin, ",") {
-		if strings.TrimSpace(o) == origin {
-			return true
-		}
-	}
-	return false
+	return isOriginAllowed(s.origin, r.Header.Get("Origin"))
 }
 func (s *Server) upgrade(w http.ResponseWriter, r *http.Request) (*peer, error) {
 	up := websocket.Upgrader{CheckOrigin: s.allowed}

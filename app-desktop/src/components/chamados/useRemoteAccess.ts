@@ -45,7 +45,11 @@ export function useRemoteAccess(ticketId: number, token: string, owner: boolean)
     if (pc.current) return pc.current
     const response = await fetch(`${TELEMETRIA_API_URL}/api/remoto/config`, { headers: headers() })
     if (!response.ok) throw new Error('Não foi possível carregar a configuração WebRTC')
-    const config: RTCConfiguration = await response.json()
+    const raw: RTCConfiguration = await response.json()
+    const config: RTCConfiguration = {
+      ...raw,
+      iceServers: Array.isArray(raw?.iceServers) ? raw.iceServers : [],
+    }
     if (!current.current) throw new Error('Sessão encerrada')
     const peer = new RTCPeerConnection(config); pc.current = peer
     peer.onicecandidate = e => { if (e.candidate) send({ type: 'ice', candidate: e.candidate.toJSON() }) }

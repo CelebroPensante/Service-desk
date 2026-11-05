@@ -5,19 +5,25 @@ import (
 	"strings"
 )
 
+func isOriginAllowed(origins, origin string) bool {
+	if origin == "" {
+		return true
+	}
+	for _, o := range strings.Split(origins, ",") {
+		trimmed := strings.TrimSpace(o)
+		if trimmed == "*" || trimmed == origin {
+			return true
+		}
+	}
+	return false
+}
+
 func CORS(origins string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/remoto/") {
 			origin := r.Header.Get("Origin")
 			if origin != "" {
-				allowed := false
-				for _, o := range strings.Split(origins, ",") {
-					if strings.TrimSpace(o) == origin {
-						allowed = true
-						break
-					}
-				}
-				if !allowed {
+				if !isOriginAllowed(origins, origin) {
 					reject(w, 403)
 					return
 				}

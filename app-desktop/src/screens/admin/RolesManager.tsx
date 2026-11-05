@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
 import type { CargoResumo, NivelPermissao } from '../../types'
 import { Plus, Trash2, Edit2 } from 'lucide-react'
+import { API_URL as BASE_API_URL } from '../../utils/data'
 
-const API_URL = 'http://localhost:8080/api/admin'
+const API_URL = `${BASE_API_URL}/api/admin`
 
 export default function RolesManager({ token }: { token: string }) {
   const [cargos, setCargos] = useState<CargoResumo[]>([])

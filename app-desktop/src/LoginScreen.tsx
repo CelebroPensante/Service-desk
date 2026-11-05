@@ -4,8 +4,7 @@ import type { Usuario, AuthResponse } from './types'
 import AuthLayout from './components/auth/AuthLayout'
 import AuthField from './components/auth/AuthField'
 import AuthSubmitButton from './components/auth/AuthSubmitButton'
-
-const API_URL = 'http://localhost:8080'
+import { API_URL } from "./utils/data";
 
 const STATS = [
   { valor: '1.2k+', label: 'Chamados/mês' },

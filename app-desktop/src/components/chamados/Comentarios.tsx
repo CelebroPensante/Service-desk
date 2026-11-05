@@ -1,8 +1,6 @@
 import { useEffect, useState, type SubmitEvent } from 'react'
 import { Send, Pencil, Trash2, Check, X } from 'lucide-react'
-import { formatarDataUtc } from '../../utils/data'
-
-const API_URL = 'http://localhost:8080'
+import { API_URL, formatarDataUtc } from '../../utils/data'
 
 interface Comentario {
   id: number

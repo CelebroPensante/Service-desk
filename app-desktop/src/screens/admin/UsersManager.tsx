@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
 import type { UsuarioResumo, CargoResumo } from '../../types'
 import { UserCheck } from 'lucide-react'
+import { API_URL as BASE_API_URL } from '../../utils/data'
 
-const API_URL = 'http://localhost:8080/api/admin'
+const API_URL = `${BASE_API_URL}/api/admin`
 
 export default function UsersManager({ token }: { token: string }) {
   const [usuarios, setUsuarios] = useState<UsuarioResumo[]>([])

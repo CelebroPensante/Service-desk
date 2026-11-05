@@ -56,10 +56,13 @@ func main() {
 	if pgStore != nil {
 		remoteRepo = pgStore
 	}
-	var ice []map[string]any
+	ice := []map[string]any{}
 	if raw := os.Getenv("REMOTE_ICE_SERVERS"); raw != "" {
 		if err := json.Unmarshal([]byte(raw), &ice); err != nil {
 			log.Fatalf("REMOTE_ICE_SERVERS inválido: %v", err)
+		}
+		if ice == nil {
+			ice = []map[string]any{}
 		}
 	}
 	apiURL := os.Getenv("API_BASE_URL")
@@ -68,7 +71,7 @@ func main() {
 	}
 	origins := os.Getenv("REMOTE_ALLOWED_ORIGINS")
 	if origins == "" {
-		origins = "http://localhost:5173,http://127.0.0.1:5173,http://tauri.localhost,tauri://localhost"
+		origins = "*"
 	}
 	remoteServer := remote.New(remote.APIAuth(apiURL), remoteRepo, origins, ice)
 	defer remoteServer.Close()
