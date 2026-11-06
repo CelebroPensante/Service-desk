@@ -1,23 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  Check,
-  Copy,
   ExternalLink,
-  KeyRound,
-  Lock,
   Maximize2,
   Minimize2,
   Monitor,
   MousePointerClick,
-  RefreshCw,
   ShieldAlert,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react'
 import type { Chamado } from '../../types'
-import { TELEMETRIA_API_URL } from '../../utils/data'
 import { remoteKey, videoPoint } from './remoteInput'
-import { useRemoteAccess, type AgentStatus } from './useRemoteAccess'
+import { useRemoteAccess } from './useRemoteAccess'
 
 export interface AcessoRemotoProps {
   chamado?: Chamado
@@ -64,7 +58,6 @@ export default function AcessoRemoto({
         chamado.status?.toLowerCase() ?? '',
       ))
   const owner = chamado != null ? chamado.idUsuario === userId : false
-  const isAdmin = level >= 3
 
   const remote = useRemoteAccess({
     ticketId: chamado?.id,
@@ -72,20 +65,20 @@ export default function AcessoRemoto({
     token,
     owner,
   })
-  const { session, agentInfo, videoStream, agentFrame, send } = remote
+  const {
+    session,
+    agentInfo,
+    videoStream,
+    hasAgentStream,
+    frameImgRef,
+    frameMetaRef,
+    send,
+  } = remote
 
   const viewerContainerRef = useRef<HTMLDivElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
-  const imgRef = useRef<HTMLImageElement>(null)
   const keys = useRef(new Map<string, string>())
   const lastMove = useRef(0)
-
-  const [passwordInput, setPasswordInput] = useState('')
-  const [newAdminPassword, setNewAdminPassword] = useState('')
-  const [showPasswordManager, setShowPasswordManager] = useState(false)
-  const [savingPassword, setSavingPassword] = useState(false)
-  const [passwordFeedback, setPasswordFeedback] = useState('')
-  const [copiedPass, setCopiedPass] = useState(false)
 
   // Estados de visualização (Zoom, Modo Expandido, Tela Cheia e Foco Exclusivo)
   const [zoom, setZoom] = useState<number>(100)
@@ -93,16 +86,13 @@ export default function AcessoRemoto({
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false)
   const [isFocused, setIsFocused] = useState<boolean>(false)
 
-  // Lista de agentes disponíveis quando acessado de dentro de um chamado
-  const [availableAgents, setAvailableAgents] = useState<AgentStatus[]>([])
-  const [selectedAgentUid, setSelectedAgentUid] = useState<string>(machineUid ?? '')
-
   const canControl = !owner && (!!session?.control || !!session?.agentStreaming)
-  const hasVisualStream = !!agentFrame || !!videoStream
+  const hasVisualStream = hasAgentStream || !!videoStream
   const monitors = session?.monitors?.length
     ? session.monitors
     : agentInfo?.monitors ?? []
-  const activeMonitor = session?.activeMonitor ?? agentFrame?.monitorId ?? 0
+  const activeMonitor =
+    session?.activeMonitor ?? frameMetaRef.current.monitorId ?? 0
 
   useEffect(() => {
     if (videoRef.current) videoRef.current.srcObject = videoStream
@@ -115,48 +105,6 @@ export default function AcessoRemoto({
     }
   }, [canControl])
 
-  // Carrega agentes conectados para permitir conexão por senha ou gerenciamento de senha ADM
-  useEffect(() => {
-    if (owner || level < 2) return
-    let active = true
-    async function loadAgents() {
-      try {
-        const res = await fetch(`${TELEMETRIA_API_URL}/api/remoto/maquinas`, {
-          headers: { Authorization: `Bearer ${token}` },
-        })
-        if (res.ok && active) {
-          const list = (await res.json()) as AgentStatus[]
-          setAvailableAgents(list)
-          if (!selectedAgentUid && list.length > 0) {
-            setSelectedAgentUid(list[0].machineUid)
-          }
-        }
-      } catch {
-        // Ignorado se offline
-      }
-    }
-    void loadAgents()
-    const timer = setInterval(() => void loadAgents(), 5000)
-    return () => {
-      active = false
-      clearInterval(timer)
-    }
-  }, [owner, level, token, selectedAgentUid])
-
-  const targetAgent =
-    agentInfo ??
-    availableAgents.find((a) => a.machineUid === (machineUid || selectedAgentUid)) ??
-    availableAgents[0] ??
-    null
-
-  // Preenche automaticamente a senha para ADM se estiver disponível e o campo estiver vazio
-  useEffect(() => {
-    if (isAdmin && targetAgent?.password && !passwordInput) {
-      setPasswordInput(targetAgent.password)
-    }
-  }, [isAdmin, targetAgent?.password, passwordInput])
-
-  // Listener de mudança de Fullscreen
   useEffect(() => {
     function onFsChange() {
       setIsFullscreen(!!document.fullscreenElement)
@@ -165,7 +113,7 @@ export default function AcessoRemoto({
     return () => document.removeEventListener('fullscreenchange', onFsChange)
   }, [])
 
-  // Ponto 5: Bloqueio NATIVO ({ passive: false }) de scroll da página quando o foco está na tela remota!
+  // Bloqueio nativo ({ passive: false }) de scroll da página quando o foco está na tela remota
   useEffect(() => {
     const container = viewerContainerRef.current
     if (!container) return
@@ -188,7 +136,6 @@ export default function AcessoRemoto({
     }
   }, [canControl, isFocused, send])
 
-  // Libera o foco ao clicar fora da tela de acesso remoto
   useEffect(() => {
     function handleOutsidePointerDown(e: MouseEvent) {
       if (
@@ -221,11 +168,15 @@ export default function AcessoRemoto({
     width: number
     height: number
   } | null {
-    if (agentFrame && imgRef.current) {
+    if (hasAgentStream && frameImgRef.current) {
       return {
-        rect: imgRef.current.getBoundingClientRect(),
-        width: agentFrame.width,
-        height: agentFrame.height,
+        rect: frameImgRef.current.getBoundingClientRect(),
+        width:
+          frameMetaRef.current.width || frameImgRef.current.naturalWidth || 1920,
+        height:
+          frameMetaRef.current.height ||
+          frameImgRef.current.naturalHeight ||
+          1080,
       }
     }
     if (videoRef.current && videoRef.current.videoWidth > 0) {
@@ -238,7 +189,6 @@ export default function AcessoRemoto({
     return null
   }
 
-  // Ponto 8: Movimento de mouse em 120 Hz (8ms) para máxima fluidez com o Agente Rust
   function movePointer(clientX: number, clientY: number, force = false): boolean {
     if (!canControl) return false
     const now = performance.now()
@@ -288,33 +238,6 @@ export default function AcessoRemoto({
     )
   }
 
-  async function handleSaveAdminPassword(generateRandom: boolean) {
-    const uid = machineUid || selectedAgentUid || targetAgent?.machineUid
-    if (!uid) return
-    setSavingPassword(true)
-    setPasswordFeedback('')
-    try {
-      const updated = await remote.updateMachinePassword(
-        uid,
-        generateRandom ? '' : newAdminPassword,
-      )
-      setPasswordInput(updated)
-      setNewAdminPassword('')
-      setPasswordFeedback(
-        `Senha atualizada no Registro do Windows (HKCU\\Software\\ServiceDesk\\Agent): ${updated}`,
-      )
-      setAvailableAgents((prev) =>
-        prev.map((a) => (a.machineUid === uid ? { ...a, password: updated } : a)),
-      )
-    } catch (err) {
-      setPasswordFeedback(
-        err instanceof Error ? err.message : 'Erro ao salvar senha',
-      )
-    } finally {
-      setSavingPassword(false)
-    }
-  }
-
   return (
     <section
       className={`${
@@ -339,28 +262,27 @@ export default function AcessoRemoto({
               }`}
             >
               Acesso Remoto{' '}
-              {(hostname || session?.hostname || targetAgent?.hostname) &&
-                `• ${hostname || session?.hostname || targetAgent?.hostname}`}
+              {(hostname || session?.hostname || agentInfo?.hostname) &&
+                `• ${hostname || session?.hostname || agentInfo?.hostname}`}
             </h2>
             <p
               className={`text-xs ${
                 isPopout ? 'text-slate-300' : 'text-slate-500'
               }`}
             >
-              Controle unificado de tela, mouse e teclado em baixa latência via Agente Rust.
+              Compartilhamento de tela e controle de mouse/teclado mediante autorização do usuário.
             </p>
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {isAdmin && targetAgent && (
+          {!session && !owner && level >= 2 && !closed && (
             <button
               type="button"
-              className={btnClass}
-              onClick={() => setShowPasswordManager((v) => !v)}
+              className={btnPrimaryClass}
+              onClick={() => void remote.requestSession()}
             >
-              <KeyRound size={14} className="text-amber-600" />
-              Gerenciar Senha no Registro (ADM)
+              Solicitar Acesso Remoto
             </button>
           )}
           {session && !isPopout && (
@@ -391,81 +313,6 @@ export default function AcessoRemoto({
         </div>
       </div>
 
-      {/* Painel ADM de Gerenciamento da Senha no Registro do Windows (Ponto 3) */}
-      {isAdmin && showPasswordManager && targetAgent && (
-        <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50/80 p-4 text-slate-800">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h3 className="text-xs font-bold uppercase tracking-wider text-amber-900">
-                Configuração de Senha da Máquina (Editor de Registro do Windows)
-              </h3>
-              <p className="mt-0.5 text-xs text-amber-800">
-                Chave persistida no Agente:{' '}
-                <code className="rounded bg-amber-100 px-1.5 py-0.5 font-mono text-[11px]">
-                  HKEY_CURRENT_USER\Software\ServiceDesk\Agent\RemotePassword
-                </code>
-              </p>
-            </div>
-            {targetAgent.password && (
-              <div className="flex items-center gap-2 rounded-lg border border-amber-300 bg-white px-3 py-1.5">
-                <span className="text-xs text-slate-500">Senha Atual:</span>
-                <span className="font-mono text-sm font-bold text-slate-900">
-                  {targetAgent.password}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    void navigator.clipboard.writeText(targetAgent.password ?? '')
-                    setCopiedPass(true)
-                    setTimeout(() => setCopiedPass(false), 2000)
-                  }}
-                  className="text-slate-500 hover:text-slate-800"
-                  title="Copiar senha"
-                >
-                  {copiedPass ? (
-                    <Check size={14} className="text-emerald-600" />
-                  ) : (
-                    <Copy size={14} />
-                  )}
-                </button>
-              </div>
-            )}
-          </div>
-
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <input
-              type="text"
-              value={newAdminPassword}
-              onChange={(e) => setNewAdminPassword(e.target.value)}
-              placeholder="Nova senha personalizada (mín. 4 caracteres)"
-              className="w-72 rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs text-slate-900"
-            />
-            <button
-              type="button"
-              disabled={savingPassword || newAdminPassword.trim().length < 4}
-              onClick={() => void handleSaveAdminPassword(false)}
-              className={btnPrimaryClass}
-            >
-              Salvar Nova Senha no Registro
-            </button>
-            <button
-              type="button"
-              disabled={savingPassword}
-              onClick={() => void handleSaveAdminPassword(true)}
-              className={btnClass}
-            >
-              <RefreshCw size={13} />
-              Gerar Senha Aleatória
-            </button>
-          </div>
-          {passwordFeedback && (
-            <p className="mt-2 text-xs font-medium text-emerald-800">
-              {passwordFeedback}
-            </p>
-          )}
-        </div>
-      )}
-
       {remote.error && (
         <p
           role="alert"
@@ -475,88 +322,9 @@ export default function AcessoRemoto({
         </p>
       )}
 
-      {/* Abertura de Sessão pelo Técnico (Via Senha Direta sem depender do usuário OU Solicitação) */}
-      {!session && !owner && level >= 2 && !closed && (
-        <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-slate-800">
-          <div className="flex flex-wrap items-end gap-3">
-            {!machineUid && availableAgents.length > 1 && (
-              <div>
-                <label className="mb-1 block text-xs font-medium text-slate-700">
-                  Estação Alvo
-                </label>
-                <select
-                  value={selectedAgentUid}
-                  onChange={(e) => setSelectedAgentUid(e.target.value)}
-                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-900"
-                >
-                  {availableAgents.map((a) => (
-                    <option key={a.machineUid} value={a.machineUid}>
-                      {a.hostname} ({a.machineUid})
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            <div className="flex-1 min-w-[220px]">
-              <label
-                htmlFor="remote-machine-pass"
-                className="mb-1 flex items-center gap-1 text-xs font-medium text-slate-700"
-              >
-                <Lock size={12} className="text-blue-600" />
-                Senha de Acesso da Máquina (acesso imediato sem aguardar usuário)
-              </label>
-              <input
-                id="remote-machine-pass"
-                type="text"
-                value={passwordInput}
-                onChange={(e) => setPasswordInput(e.target.value)}
-                placeholder="Digite a senha gerada pelo agente (ex: A7K9M2P4)"
-                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-xs text-slate-900"
-              />
-            </div>
-
-            <button
-              type="button"
-              disabled={!passwordInput.trim()}
-              onClick={() =>
-                void remote.requestSession(
-                  passwordInput,
-                  machineUid || selectedAgentUid,
-                )
-              }
-              className={btnPrimaryClass}
-            >
-              <KeyRound size={14} />
-              Conectar Agora com Senha
-            </button>
-
-            {chamado && (
-              <button
-                type="button"
-                onClick={() => void remote.requestSession()}
-                className={btnClass}
-              >
-                Solicitar Permissão ao Usuário
-              </button>
-            )}
-          </div>
-          {targetAgent ? (
-            <p className="mt-2 text-[11px] text-emerald-700">
-              ● Agente Rust online em <strong>{targetAgent.hostname}</strong> (
-              {targetAgent.monitors?.length || 1} monitor(es) detectado(s)).
-            </p>
-          ) : (
-            <p className="mt-2 text-[11px] text-slate-500">
-              Aguardando conexão do Agente Rust da estação ou inicie via solicitação ao usuário.
-            </p>
-          )}
-        </div>
-      )}
-
       {!session && owner && (
         <p className="mt-3 text-xs text-slate-500">
-          Caso um técnico inicie o atendimento remoto nesta máquina, você receberá uma notificação imediatamente.
+          As solicitações de acesso remoto do técnico aparecerão aqui e como notificação no topo da tela.
         </p>
       )}
 
@@ -568,10 +336,10 @@ export default function AcessoRemoto({
               <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
               <span className="font-medium">
                 {session.control || session.agentStreaming
-                  ? `Acesso remoto completo ativo (Tela + Mouse e Teclado liberados) — Técnico: ${session.technicianName}`
+                  ? `Acesso remoto autorizado e em andamento — Técnico: ${session.technicianName}`
                   : session.sharing
                     ? 'Tela compartilhada ativa.'
-                    : `Técnico ${session.technicianName} solicitou acesso remoto.`}
+                    : `Solicitação enviada pelo técnico ${session.technicianName}. Aguardando autorização do usuário na máquina…`}
               </span>
             </div>
             {owner && (
@@ -580,32 +348,6 @@ export default function AcessoRemoto({
               </span>
             )}
           </div>
-
-          {/* Se a sessão foi criada sem senha no chamado, o técnico ainda pode inserir a senha para entrar direto OU o usuário autorizar com 1 clique (sem etapa separada de mouse/teclado!) */}
-          {!session.sharing && !owner && (
-            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <input
-                type="text"
-                value={passwordInput}
-                onChange={(e) => setPasswordInput(e.target.value)}
-                placeholder="Senha da máquina para conectar sem aguardar"
-                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 font-mono text-xs text-slate-900"
-              />
-              <button
-                type="button"
-                disabled={!passwordInput.trim()}
-                onClick={() =>
-                  remote.authenticateWithPassword(
-                    passwordInput,
-                    machineUid || selectedAgentUid,
-                  )
-                }
-                className={btnPrimaryClass}
-              >
-                Autenticar com Senha
-              </button>
-            </div>
-          )}
 
           {owner && !session.sharing && (
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3.5 text-slate-900">
@@ -625,7 +367,7 @@ export default function AcessoRemoto({
         </div>
       )}
 
-      {/* Visor de Acesso Remoto + Barra de Ferramentas (Pontos 5, 6, 7 e 8) */}
+      {/* Visor de Acesso Remoto + Barra de Ferramentas */}
       <div
         ref={viewerContainerRef}
         className={`mt-4 flex flex-col rounded-xl border bg-slate-950 ${
@@ -638,7 +380,7 @@ export default function AcessoRemoto({
       >
         {/* Barra de Ferramentas do Visor (Monitores, Foco, Zoom, Modo Expandido, Tela Cheia, Pop-out) */}
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-slate-900 px-3 py-2 text-xs text-slate-200 rounded-t-xl">
-          {/* Ponto 7: Seletor de Monitores em Tempo Real */}
+          {/* Seletor de Monitores em Tempo Real */}
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-[11px] font-medium text-slate-400 mr-1">
               Monitores:
@@ -666,7 +408,7 @@ export default function AcessoRemoto({
             )}
           </div>
 
-          {/* Indicador de Foco Capturado (Ponto 5) */}
+          {/* Indicador de Foco Capturado */}
           {canControl && (
             <div className="flex items-center gap-2">
               <span
@@ -690,20 +432,18 @@ export default function AcessoRemoto({
                   }}
                   className="rounded bg-slate-800 px-2 py-0.5 text-[11px] text-slate-300 hover:bg-slate-700"
                 >
-                  Soltar Foco (Esc)
+                  Soltar Foco (Ctrl+Alt+Esc)
                 </button>
               )}
             </div>
           )}
 
-          {/* Ponto 6: Controles de Zoom, Expandir, Tela Cheia e Janela Separada */}
+          {/* Controles de Zoom, Expandir, Tela Cheia e Janela Separada */}
           <div className="flex flex-wrap items-center gap-1.5">
             <div className="flex items-center rounded-md bg-slate-800 p-0.5">
               <button
                 type="button"
-                onClick={() =>
-                  setZoom((z) => Math.max(100, z - 25))
-                }
+                onClick={() => setZoom((z) => Math.max(100, z - 25))}
                 disabled={zoom <= 100}
                 className="rounded px-1.5 py-1 text-slate-300 hover:bg-slate-700 disabled:opacity-40"
                 title="Diminuir Zoom"
@@ -726,9 +466,7 @@ export default function AcessoRemoto({
               ))}
               <button
                 type="button"
-                onClick={() =>
-                  setZoom((z) => Math.min(200, z + 25))
-                }
+                onClick={() => setZoom((z) => Math.min(200, z + 25))}
                 disabled={zoom >= 200}
                 className="rounded px-1.5 py-1 text-slate-300 hover:bg-slate-700 disabled:opacity-40"
                 title="Aumentar Zoom"
@@ -848,21 +586,20 @@ export default function AcessoRemoto({
             send({ type: 'input', input: { kind: 'key', key, down: false } })
           }}
         >
-          {/* Stream Nativo de Baixa Latência do Agente Rust */}
-          {agentFrame && (
-            <img
-              ref={imgRef}
-              src={agentFrame.dataUrl}
-              alt="Tela remota da estação"
-              draggable={false}
-              style={{
-                width: zoom === 100 ? '100%' : `${zoom}%`,
-                maxWidth: zoom === 100 ? '100%' : 'none',
-                maxHeight: zoom === 100 ? '100%' : 'none',
-              }}
-              className="object-contain select-none pointer-events-none"
-            />
-          )}
+          {/* Stream Binário de Baixa Latência do Agente Rust (Zero Re-renders por Frame) */}
+          <img
+            ref={frameImgRef}
+            alt="Tela remota da estação"
+            draggable={false}
+            style={{
+              width: zoom === 100 ? '100%' : `${zoom}%`,
+              maxWidth: zoom === 100 ? '100%' : 'none',
+              maxHeight: zoom === 100 ? '100%' : 'none',
+            }}
+            className={`object-contain select-none pointer-events-none ${
+              hasAgentStream ? '' : 'hidden'
+            }`}
+          />
 
           {/* Fallback WebRTC quando não há quadro nativo do Agente */}
           <video
@@ -876,7 +613,7 @@ export default function AcessoRemoto({
               maxHeight: zoom === 100 ? '100%' : 'none',
             }}
             className={`object-contain select-none pointer-events-none ${
-              !agentFrame && videoStream ? '' : 'hidden'
+              !hasAgentStream && videoStream ? '' : 'hidden'
             }`}
           />
         </div>

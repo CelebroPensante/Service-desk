@@ -26,7 +26,6 @@ type peer struct {
 	code        string
 	machineUID  string
 	hostname    string
-	password    string
 	monitors    []MonitorInfo
 	pairExpires time.Time
 }
@@ -36,6 +35,13 @@ func (p *peer) send(m Message) error {
 	defer p.mu.Unlock()
 	p.conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
 	return p.conn.WriteJSON(m)
+}
+
+func (p *peer) sendBinary(raw []byte) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
+	return p.conn.WriteMessage(websocket.BinaryMessage, raw)
 }
 
 func (p *peer) close() { p.conn.Close() }
@@ -96,7 +102,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/remoto/maquinas", s.listMachinesHTTP)
 	mux.HandleFunc("GET /api/remoto/maquinas/{uid}", s.machineHTTP)
 	mux.HandleFunc("POST /api/remoto/maquinas/{uid}", s.machineHTTP)
-	mux.HandleFunc("PUT /api/remoto/maquinas/{uid}/senha", s.machinePasswordHTTP)
+	mux.HandleFunc("POST /api/remoto/maquinas/{uid}/autorizar", s.machineAuthorizeHTTP)
 	mux.HandleFunc("GET /api/remoto/maquinas/{uid}/ws", s.machineWS)
 	mux.HandleFunc("GET /api/remoto/chamados/{id}", s.ticketHTTP)
 	mux.HandleFunc("POST /api/remoto/chamados/{id}", s.ticketHTTP)
@@ -157,7 +163,6 @@ func (s *Server) configuration(w http.ResponseWriter, r *http.Request) {
 	respond(w, 200, map[string]any{"iceServers": ice})
 }
 
-// Retorna sessões remotas em andamento para que a máquina acessada exiba um banner de notificação global.
 func (s *Server) activeSessionsHTTP(w http.ResponseWriter, r *http.Request) {
 	u, err := s.auth(r.Context(), bearer(r))
 	if err != nil {
@@ -178,7 +183,6 @@ func (s *Server) activeSessionsHTTP(w http.ResponseWriter, r *http.Request) {
 	respond(w, 200, map[string]any{"sessions": active})
 }
 
-// Lista todas as máquinas com agente de acesso remoto online.
 func (s *Server) listMachinesHTTP(w http.ResponseWriter, r *http.Request) {
 	u, err := s.auth(r.Context(), bearer(r))
 	if err != nil {
@@ -194,15 +198,11 @@ func (s *Server) listMachinesHTTP(w http.ResponseWriter, r *http.Request) {
 	list := []AgentStatus{}
 	for uid, a := range s.agentsByMachine {
 		st := AgentStatus{
-			MachineUID:  uid,
-			Hostname:    a.hostname,
-			Online:      true,
-			HasPassword: a.password != "",
-			Monitors:    a.monitors,
-			InSession:   a.sessionID != "",
-		}
-		if u.Level >= 3 {
-			st.Password = a.password
+			MachineUID: uid,
+			Hostname:   a.hostname,
+			Online:     true,
+			Monitors:   a.monitors,
+			InSession:  a.sessionID != "",
 		}
 		if sess := s.machineSessions[uid]; sess != nil {
 			st.Technician = sess.TechnicianName
@@ -236,15 +236,11 @@ func (s *Server) machineHTTP(w http.ResponseWriter, r *http.Request) {
 		var status *AgentStatus
 		if agent != nil {
 			st := AgentStatus{
-				MachineUID:  uid,
-				Hostname:    agent.hostname,
-				Online:      true,
-				HasPassword: agent.password != "",
-				Monitors:    agent.monitors,
-				InSession:   agent.sessionID != "",
-			}
-			if u.Level >= 3 {
-				st.Password = agent.password
+				MachineUID: uid,
+				Hostname:   agent.hostname,
+				Online:     true,
+				Monitors:   agent.monitors,
+				InSession:  agent.sessionID != "",
 			}
 			status = &st
 		}
@@ -261,19 +257,7 @@ func (s *Server) machineHTTP(w http.ResponseWriter, r *http.Request) {
 			respond(w, 200, map[string]any{"session": existing})
 			return
 		}
-		rejectMsg(w, 409, "Esta estação já está em uma sessão remota com outro técnico.")
-		return
-	}
-
-	var req struct {
-		Password string `json:"password"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
-	pass := strings.TrimSpace(req.Password)
-
-	// Valida a senha da máquina salva no Registro do Windows do Agente
-	if agent.password != "" && !strings.EqualFold(pass, agent.password) {
-		rejectMsg(w, 403, "Senha de acesso remoto incorreta para esta máquina.")
+		rejectMsg(w, 409, "Esta estação já possui uma solicitação ou sessão remota ativa.")
 		return
 	}
 
@@ -290,72 +274,68 @@ func (s *Server) machineHTTP(w http.ResponseWriter, r *http.Request) {
 		OwnerID:        0,
 		TechnicianID:   u.ID,
 		TechnicianName: u.Name,
-		Sharing:        true,
+		Sharing:        false,
 		Control:        false,
-		AgentStreaming: true,
+		AgentStreaming: false,
 		Monitors:       agent.monitors,
 		ActiveMonitor:  0,
-		Expires:        time.Now().Add(time.Hour),
+		Expires:        time.Now().Add(2 * time.Minute),
+		agent:          agent,
+		agentPending:   true,
 	}
 	if s.repo != nil && !s.record(v, u.ID, "requested") {
 		reject(w, 503)
 		return
 	}
-	if err := s.attachAgentLocked(v, agent); err != nil {
-		rejectMsg(w, 503, err.Error())
+	agent.sessionID = v.ID
+	// Solicita permissão ao usuário na máquina alvo (via diálogo nativo do Agente Rust e/ou banner no frontend)
+	if err := agent.send(Message{Type: "prompt_consent", SessionID: v.ID, TechnicianName: u.Name}); err != nil {
+		agent.sessionID = ""
+		rejectMsg(w, 503, "Agente desconectado")
 		return
 	}
 	s.machineSessions[uid] = v
 	respond(w, 201, map[string]any{"session": v})
 }
 
-func (s *Server) machinePasswordHTTP(w http.ResponseWriter, r *http.Request) {
+// Permite ao usuário na estação autorizar ou recusar uma solicitação de acesso remoto pelo banner do frontend.
+func (s *Server) machineAuthorizeHTTP(w http.ResponseWriter, r *http.Request) {
 	uid := strings.TrimSpace(r.PathValue("uid"))
-	if uid == "" {
-		reject(w, 400)
-		return
-	}
 	u, err := s.auth(r.Context(), bearer(r))
 	if err != nil {
 		reject(w, 401)
 		return
 	}
-	// Apenas técnicos com permissão de ADM (nível >= 3 / ADM) podem alterar a senha da máquina
-	if u.Level < 3 {
-		rejectMsg(w, 403, "Apenas técnicos com permissão de Administrador podem alterar a senha da máquina.")
-		return
-	}
 	var req struct {
-		Password string `json:"password"`
+		Allow bool `json:"allow"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
 	s.mu.Lock()
-	agent := s.agentsByMachine[uid]
-	if agent == nil {
-		s.mu.Unlock()
-		rejectMsg(w, 404, "Agente desta máquina não está conectado no momento.")
+	defer s.mu.Unlock()
+	v := s.machineSessions[uid]
+	if v == nil {
+		rejectMsg(w, 404, "Sessão não encontrada")
 		return
 	}
-	newPass := strings.TrimSpace(req.Password)
-	if newPass == "" {
-		b := make([]byte, 4)
-		_, _ = rand.Read(b)
-		newPass = strings.ToUpper(hex.EncodeToString(b))
-	}
-	if len(newPass) < 4 {
-		s.mu.Unlock()
-		rejectMsg(w, 400, "A senha deve ter pelo menos 4 caracteres.")
+	if !req.Allow {
+		if v.technician != nil {
+			v.technician.send(Message{Type: "error", Error: "O usuário recusou a solicitação de acesso remoto."})
+		}
+		s.end(v, u.ID)
+		respond(w, 200, map[string]any{"ok": true})
 		return
 	}
-	agent.password = newPass
-	s.mu.Unlock()
-
-	if err := agent.send(Message{Type: "set_password", Password: newPass}); err != nil {
-		rejectMsg(w, 503, "Falha ao enviar nova senha para o agente.")
-		return
+	v.Sharing = true
+	v.AgentStreaming = true
+	v.Expires = time.Now().Add(time.Hour)
+	_ = s.record(v, u.ID, "screen_allowed")
+	_ = s.record(v, u.ID, "control_allowed")
+	if v.agent != nil {
+		_ = v.agent.send(Message{Type: "grant", SessionID: v.ID, TechnicianName: v.TechnicianName})
 	}
-	respond(w, 200, map[string]any{"machineUid": uid, "password": newPass})
+	s.broadcast(v)
+	respond(w, 200, map[string]any{"session": v})
 }
 
 func (s *Server) findAvailableAgentLocked(preferredUID string) *peer {
@@ -419,14 +399,6 @@ func (s *Server) ticketHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		Password   string `json:"password"`
-		MachineUID string `json:"machineUid"`
-	}
-	if r.Body != nil {
-		_ = json.NewDecoder(r.Body).Decode(&req)
-	}
-
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
 		reject(w, 500)
@@ -443,29 +415,6 @@ func (s *Server) ticketHTTP(w http.ResponseWriter, r *http.Request) {
 	if !s.record(v, u.ID, "requested") {
 		reject(w, 503)
 		return
-	}
-
-	// Se o técnico informou a senha da máquina na abertura, autentica direto no agente sem depender do usuário
-	pass := strings.TrimSpace(req.Password)
-	if pass != "" {
-		agent := s.findAvailableAgentLocked(strings.TrimSpace(req.MachineUID))
-		if agent == nil {
-			rejectMsg(w, 404, "Nenhum agente ativo encontrado para conexão direta por senha.")
-			return
-		}
-		if agent.password != "" && !strings.EqualFold(pass, agent.password) {
-			rejectMsg(w, 403, "Senha de acesso remoto incorreta.")
-			return
-		}
-		v.Sharing = true
-		v.AgentStreaming = true
-		v.Expires = time.Now().Add(time.Hour)
-		_ = s.record(v, u.ID, "screen_allowed")
-		_ = s.record(v, u.ID, "control_allowed")
-		if err := s.attachAgentLocked(v, agent); err != nil {
-			rejectMsg(w, 503, err.Error())
-			return
-		}
 	}
 
 	s.sessions[id] = v
@@ -565,7 +514,6 @@ func (s *Server) machineWS(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	s.read(p, func(m Message) {
-		// Fast-path para eventos de mouse/teclado sem bloquear mutex global se agente já estiver ativo
 		if m.Type == "input" {
 			s.mu.Lock()
 			active := s.machineSessions[uid] == v && v.Sharing && v.Control
@@ -591,7 +539,7 @@ func (s *Server) machineWS(w http.ResponseWriter, r *http.Request) {
 		if err := s.apply(v, p, m); err != nil {
 			p.send(Message{Type: "error", Error: err.Error()})
 		}
-	})
+	}, nil)
 }
 
 func (s *Server) ticketWS(w http.ResponseWriter, r *http.Request) {
@@ -640,7 +588,6 @@ func (s *Server) ticketWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	s.read(p, func(m Message) {
-		// Fast-path para input de baixa latência
 		if m.Type == "input" {
 			s.mu.Lock()
 			tech := p == v.technician
@@ -667,10 +614,10 @@ func (s *Server) ticketWS(w http.ResponseWriter, r *http.Request) {
 		if err := s.apply(v, p, m); err != nil {
 			p.send(Message{Type: "error", Error: err.Error()})
 		}
-	})
+	}, nil)
 }
 
-func (s *Server) read(p *peer, handle func(Message)) {
+func (s *Server) read(p *peer, handle func(Message), handleBinary func([]byte)) {
 	deadline := func() time.Time {
 		d := time.Now().Add(45 * time.Second)
 		if !p.user.Expires.IsZero() && p.user.Expires.Before(d) {
@@ -701,11 +648,21 @@ func (s *Server) read(p *peer, handle func(Message)) {
 		}
 	}()
 	for {
-		var m Message
-		if p.conn.ReadJSON(&m) != nil {
+		msgType, raw, err := p.conn.ReadMessage()
+		if err != nil {
 			return
 		}
 		_ = p.conn.SetReadDeadline(deadline())
+		if msgType == websocket.BinaryMessage {
+			if handleBinary != nil {
+				handleBinary(raw)
+			}
+			continue
+		}
+		var m Message
+		if json.Unmarshal(raw, &m) != nil {
+			return
+		}
 		handle(m)
 	}
 }
@@ -765,41 +722,13 @@ func (s *Server) apply(v *Session, p *peer, m Message) error {
 		}
 		v.Sharing = true
 		v.Expires = time.Now().Add(time.Hour)
-		// Ponto 4: Unifica permissão de tela + teclado/mouse automaticamente quando há um agente da estação conectado
+		// Unifica permissão de tela + teclado/mouse automaticamente quando há um agente da estação conectado
 		if v.agent == nil {
 			if a := s.findAvailableAgentLocked(m.MachineUID); a != nil {
 				_ = s.record(v, p.user.ID, "control_allowed")
 				_ = s.attachAgentLocked(v, a)
 				v.AgentStreaming = true
 			}
-		}
-	case "auth_password":
-		if !tech {
-			return denied
-		}
-		pass := strings.TrimSpace(m.Password)
-		if pass == "" {
-			return errors.New("Informe a senha de acesso remoto da máquina")
-		}
-		a := s.findAvailableAgentLocked(m.MachineUID)
-		if a == nil {
-			return errors.New("Agente da máquina não está conectado")
-		}
-		if a.password != "" && !strings.EqualFold(pass, a.password) {
-			return errors.New("Senha de acesso remoto incorreta")
-		}
-		if !v.Sharing {
-			if !s.record(v, p.user.ID, "screen_allowed") {
-				s.end(v, p.user.ID)
-				return errors.New("Falha na auditoria")
-			}
-			v.Sharing = true
-			v.Expires = time.Now().Add(time.Hour)
-		}
-		_ = s.record(v, p.user.ID, "control_allowed")
-		v.AgentStreaming = true
-		if err := s.attachAgentLocked(v, a); err != nil {
-			return err
 		}
 	case "select_monitor":
 		if !tech || v.agent == nil {
@@ -839,7 +768,6 @@ func (s *Server) apply(v *Session, p *peer, m Message) error {
 			s.end(v, p.user.ID)
 			return denied
 		}
-		// Se houver agente da estação disponível, já vincula sem exigir código manual de 32 caracteres
 		if a := s.findAvailableAgentLocked(v.MachineUID); a != nil {
 			_ = s.record(v, p.user.ID, "control_allowed")
 			if err := s.attachAgentLocked(v, a); err == nil {
@@ -903,7 +831,6 @@ func (s *Server) apply(v *Session, p *peer, m Message) error {
 }
 
 func (s *Server) agentWS(w http.ResponseWriter, r *http.Request) {
-	// Native agent only. Browser JavaScript must use the ticket consent flow.
 	if r.Header.Get("Origin") != "" {
 		reject(w, 403)
 		return
@@ -923,7 +850,6 @@ func (s *Server) agentWS(w http.ResponseWriter, r *http.Request) {
 	p.code = first.PairCode
 	p.machineUID = strings.TrimSpace(first.MachineUID)
 	p.hostname = strings.TrimSpace(first.Hostname)
-	p.password = strings.TrimSpace(first.Password)
 	p.monitors = first.Monitors
 	if p.machineUID != "" {
 		p.pairExpires = time.Now().Add(365 * 24 * time.Hour)
@@ -974,15 +900,6 @@ func (s *Server) agentWS(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	s.read(p, func(m Message) {
-		if m.Type == "password_updated" {
-			s.mu.Lock()
-			if m.Password != "" {
-				p.password = m.Password
-			}
-			s.mu.Unlock()
-			return
-		}
-		// Fast-path para encaminhamento de quadros de vídeo do agente sem contenção
 		if m.Type == "frame" {
 			s.mu.Lock()
 			var tech, owner *peer
@@ -1033,15 +950,25 @@ func (s *Server) agentWS(w http.ResponseWriter, r *http.Request) {
 				switch m.Type {
 				case "ready":
 					if v.agentPending {
+						v.Sharing = true
 						v.Control = true
+						v.AgentStreaming = true
 						v.agentPending = false
+						v.Expires = time.Now().Add(time.Hour)
 						if len(m.Monitors) > 0 {
 							v.Monitors = m.Monitors
 							p.monitors = m.Monitors
 						}
 						v.ActiveMonitor = m.ActiveMonitor
+						_ = s.record(v, 0, "screen_allowed")
+						_ = s.record(v, 0, "control_allowed")
 						s.broadcast(v)
 					}
+				case "consent_denied":
+					if v.technician != nil {
+						v.technician.send(Message{Type: "error", Error: m.Error})
+					}
+					s.end(v, 0)
 				case "monitor_selected":
 					v.ActiveMonitor = m.ActiveMonitor
 					if len(m.Monitors) > 0 {
@@ -1061,6 +988,34 @@ func (s *Server) agentWS(w http.ResponseWriter, r *http.Request) {
 				}
 				return
 			}
+		}
+	}, func(raw []byte) {
+		if len(raw) < 6 {
+			return
+		}
+		s.mu.Lock()
+		var tech, owner *peer
+		for _, v := range s.sessions {
+			if v.agent == p {
+				tech = v.technician
+				owner = v.owner
+				break
+			}
+		}
+		if tech == nil {
+			for _, v := range s.machineSessions {
+				if v.agent == p {
+					tech = v.technician
+					break
+				}
+			}
+		}
+		s.mu.Unlock()
+		if tech != nil {
+			_ = tech.sendBinary(raw)
+		}
+		if owner != nil {
+			_ = owner.sendBinary(raw)
 		}
 	})
 }

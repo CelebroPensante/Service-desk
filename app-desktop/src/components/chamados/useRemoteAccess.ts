@@ -15,8 +15,6 @@ export interface AgentStatus {
   machineUid: string
   hostname: string
   online: boolean
-  hasPassword: boolean
-  password?: string
   monitors: MonitorInfo[]
   inSession: boolean
   technicianName?: string
@@ -87,13 +85,18 @@ export function useRemoteAccess(
   const [error, setError] = useState('')
   const [connected, setConnected] = useState(false)
   const [videoStream, setVideoStream] = useState<MediaStream | null>(null)
-  const [agentFrame, setAgentFrame] = useState<{
-    dataUrl: string
-    width: number
-    height: number
-    monitorId: number
-  } | null>(null)
+  const [hasAgentStream, setHasAgentStream] = useState(false)
   const [history, setHistory] = useState<RemoteEvent[]>([])
+
+  // Referências diretas de DOM para atualizar os frames a 30+ FPS sem causar re-renders do React
+  const frameImgRef = useRef<HTMLImageElement | null>(null)
+  const frameMetaRef = useRef<{ width: number; height: number; monitorId: number }>({
+    width: 1920,
+    height: 1080,
+    monitorId: 0,
+  })
+  const prevBlobUrlRef = useRef<string | null>(null)
+  const hasStreamRef = useRef(false)
 
   const ws = useRef<WebSocket | null>(null)
   const pc = useRef<RTCPeerConnection | null>(null)
@@ -125,8 +128,16 @@ export function useRemoteAccess(
     })
     candidates.current = []
     sharing.current = false
+    hasStreamRef.current = false
     setVideoStream(null)
-    setAgentFrame(null)
+    setHasAgentStream(false)
+    if (prevBlobUrlRef.current) {
+      URL.revokeObjectURL(prevBlobUrlRef.current)
+      prevBlobUrlRef.current = null
+    }
+    if (frameImgRef.current) {
+      frameImgRef.current.removeAttribute('src')
+    }
   }, [])
 
   const end = useCallback(() => {
@@ -203,6 +214,30 @@ export function useRemoteAccess(
       }
     }
 
+    function onBinaryFrame(buf: ArrayBuffer) {
+      if (disposed || buf.byteLength <= 6) return
+      const view = new DataView(buf)
+      const monitorId = view.getUint16(0, false)
+      const width = view.getUint16(2, false) || 1920
+      const height = view.getUint16(4, false) || 1080
+      frameMetaRef.current = { width, height, monitorId }
+
+      const blob = new Blob([new Uint8Array(buf, 6)], { type: 'image/jpeg' })
+      const url = URL.createObjectURL(blob)
+      if (frameImgRef.current) {
+        frameImgRef.current.src = url
+      }
+      if (prevBlobUrlRef.current) {
+        URL.revokeObjectURL(prevBlobUrlRef.current)
+      }
+      prevBlobUrlRef.current = url
+
+      if (!hasStreamRef.current) {
+        hasStreamRef.current = true
+        setHasAgentStream(true)
+      }
+    }
+
     function onRawMessage(rawText: string) {
       if (disposed) return
       let message: WireMessage
@@ -212,14 +247,19 @@ export function useRemoteAccess(
         return
       }
 
-      // Fast-path: quadros nativos do Agente Rust são renderizados imediatamente sem fila de Promise
       if (message.type === 'frame' && message.frame) {
-        setAgentFrame({
-          dataUrl: `data:image/jpeg;base64,${message.frame}`,
-          width: message.width || 1280,
-          height: message.height || 720,
+        frameMetaRef.current = {
+          width: message.width || 1920,
+          height: message.height || 1080,
           monitorId: message.monitorId ?? 0,
-        })
+        }
+        if (frameImgRef.current) {
+          frameImgRef.current.src = `data:image/jpeg;base64,${message.frame}`
+        }
+        if (!hasStreamRef.current) {
+          hasStreamRef.current = true
+          setHasAgentStream(true)
+        }
         return
       }
 
@@ -275,6 +315,7 @@ export function useRemoteAccess(
           setSession(data.session)
           if (data.session) {
             socket = new WebSocket(baseWsPath)
+            socket.binaryType = 'arraybuffer'
             ws.current = socket
             socket.onopen = () => {
               if (disposed) return
@@ -282,7 +323,9 @@ export function useRemoteAccess(
               setConnected(true)
             }
             socket.onmessage = (event) => {
-              if (typeof event.data === 'string') {
+              if (event.data instanceof ArrayBuffer) {
+                onBinaryFrame(event.data)
+              } else if (typeof event.data === 'string') {
                 onRawMessage(event.data)
               }
             }
@@ -328,7 +371,7 @@ export function useRemoteAccess(
     }
   }, [ticketId, machineUid, isDirectMachine, token, owner, headers, getPeer, send, end, clearMedia])
 
-  async function requestSession(password?: string, preferredMachineUid?: string) {
+  async function requestSession() {
     setError('')
     try {
       const targetUrl = isDirectMachine
@@ -337,10 +380,6 @@ export function useRemoteAccess(
       const response = await fetch(targetUrl, {
         method: 'POST',
         headers: headers(),
-        body: JSON.stringify({
-          password: password?.trim() || '',
-          machineUid: preferredMachineUid || machineUid || '',
-        }),
       })
       if (!response.ok) {
         const body = await response.json().catch(() => null)
@@ -348,24 +387,15 @@ export function useRemoteAccess(
           body?.erro ||
             (response.status === 409
               ? 'Já existe uma sessão ativa ou o chamado está encerrado'
-              : 'Não foi possível iniciar o acesso remoto'),
+              : 'Não foi possível solicitar o acesso remoto'),
         )
       }
       const data: { session: RemoteSession } = await response.json()
       current.current = data.session
       setSession(data.session)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Falha ao iniciar sessão')
+      setError(err instanceof Error ? err.message : 'Falha ao solicitar sessão')
     }
-  }
-
-  function authenticateWithPassword(password: string, preferredMachineUid?: string) {
-    setError('')
-    send({
-      type: 'auth_password',
-      password: password.trim(),
-      machineUid: preferredMachineUid || machineUid || '',
-    })
   }
 
   function selectMonitor(monitorId: number) {
@@ -373,35 +403,14 @@ export function useRemoteAccess(
     send({ type: 'select_monitor', monitorId })
   }
 
-  async function updateMachinePassword(targetMachineUid: string, newPassword?: string) {
-    setError('')
-    const response = await fetch(
-      `${TELEMETRIA_API_URL}/api/remoto/maquinas/${encodeURIComponent(targetMachineUid)}/senha`,
-      {
-        method: 'PUT',
-        headers: headers(),
-        body: JSON.stringify({ password: newPassword?.trim() || '' }),
-      },
-    )
-    if (!response.ok) {
-      const body = await response.json().catch(() => null)
-      throw new Error(body?.erro ?? 'Não foi possível alterar a senha da máquina')
-    }
-    const data: { machineUid: string; password: string } = await response.json()
-    setAgentInfo((prev) => (prev ? { ...prev, password: data.password, hasPassword: true } : prev))
-    return data.password
-  }
-
   async function share() {
     if (sharing.current || !connected) return
     sharing.current = true
     setError('')
     try {
-      // Primeiro envia 'share': se o Agente Rust estiver conectado na estação, ele assume captura + controle automaticamente!
       if (!send({ type: 'share', machineUid: machineUid || '' })) {
         throw new Error('Conexão encerrada')
       }
-      // Fallback opcional para WebRTC caso queira compartilhar do navegador também
       if (navigator.mediaDevices?.getDisplayMedia) {
         try {
           const stream = await navigator.mediaDevices.getDisplayMedia({
@@ -424,7 +433,7 @@ export function useRemoteAccess(
             stream.getTracks().forEach((t) => t.stop())
           }
         } catch {
-          // Se o usuário cancelar o popup do navegador mas o Agente Rust estiver transmitindo, mantém a sessão do Agente!
+          // Agente Rust assume a transmissão se o popup do navegador for cancelado
         }
       }
     } catch (err) {
@@ -441,14 +450,14 @@ export function useRemoteAccess(
     error,
     connected,
     videoStream,
-    agentFrame,
+    hasAgentStream,
+    frameImgRef,
+    frameMetaRef,
     history,
     send,
     end,
     share,
     requestSession,
-    authenticateWithPassword,
     selectMonitor,
-    updateMachinePassword,
   }
 }

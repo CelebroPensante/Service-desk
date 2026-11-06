@@ -5,7 +5,6 @@ import {
   Cpu,
   Eye,
   Inbox,
-  KeyRound,
   MemoryStick,
   Monitor,
   ScreenShare,
@@ -377,23 +376,13 @@ function TecnicoPanel({
                     </>
                   )}
 
-                  {/* Barra de Acesso Remoto Direto na Estação (Pontos 2 e 3) */}
+                  {/* Barra de Acesso Remoto Direto na Estação (Mediante Solicitação/Permissão) */}
                   <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-200/80 pt-3">
-                    {nivelAcesso >= 3 && ag?.password ? (
-                      <span
-                        className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-1 font-mono text-[11px] font-semibold text-amber-900 border border-amber-200"
-                        title="Senha de acesso remoto salva no Registro do Windows desta estação"
-                      >
-                        <KeyRound size={11} className="text-amber-600" />
-                        Senha: {ag.password}
-                      </span>
-                    ) : (
-                      <span className="text-[11px] text-slate-500">
-                        {ag?.online
-                          ? `Agente Remoto Pronto (${ag.monitors?.length || 1} tela(s))`
-                          : 'Agente Remoto aguardando'}
-                      </span>
-                    )}
+                    <span className="text-[11px] text-slate-500">
+                      {ag?.online
+                        ? `Agente Remoto Pronto (${ag.monitors?.length || 1} tela(s))`
+                        : 'Agente Remoto aguardando'}
+                    </span>
 
                     <button
                       type="button"

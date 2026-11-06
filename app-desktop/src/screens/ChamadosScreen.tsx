@@ -384,15 +384,59 @@ function ChamadosScreen({ usuario, token, onSair }: ChamadosScreenProps) {
                   : "solicitou acesso remoto a esta estação."}
               </span>
             </div>
-            {sessoesParaNotificar[0].ticketId > 0 && (
-              <button
-                type="button"
-                onClick={() => void abrirDetalhe(sessoesParaNotificar[0].ticketId)}
-                className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700"
-              >
-                Abrir Chamado #{sessoesParaNotificar[0].ticketId}
-              </button>
-            )}
+            <div className="flex items-center gap-2">
+              {!sessoesParaNotificar[0].sharing && sessoesParaNotificar[0].machineUid && (
+                <>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await fetch(
+                        `${TELEMETRIA_API_URL}/api/remoto/maquinas/${encodeURIComponent(sessoesParaNotificar[0].machineUid!)}/autorizar`,
+                        {
+                          method: "POST",
+                          headers: {
+                            Authorization: `Bearer ${token}`,
+                            "Content-Type": "application/json",
+                          },
+                          body: JSON.stringify({ allow: true }),
+                        },
+                      );
+                    }}
+                    className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
+                  >
+                    Autorizar Acesso
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await fetch(
+                        `${TELEMETRIA_API_URL}/api/remoto/maquinas/${encodeURIComponent(sessoesParaNotificar[0].machineUid!)}/autorizar`,
+                        {
+                          method: "POST",
+                          headers: {
+                            Authorization: `Bearer ${token}`,
+                            "Content-Type": "application/json",
+                          },
+                          body: JSON.stringify({ allow: false }),
+                        },
+                      );
+                    }}
+                    className="rounded-lg border border-amber-400 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100"
+                  >
+                    Recusar
+                  </button>
+                </>
+              )}
+              {sessoesParaNotificar[0].ticketId > 0 && (
+                <button
+                  type="button"
+                  onClick={() => void abrirDetalhe(sessoesParaNotificar[0].ticketId)}
+                  className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700"
+                >
+                  Abrir Chamado #{sessoesParaNotificar[0].ticketId}
+                </button>
+              )}
+            </div>
           </div>
         )}
         {conteudo}

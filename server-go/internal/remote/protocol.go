@@ -49,14 +49,12 @@ type MonitorInfo struct {
 }
 
 type AgentStatus struct {
-	MachineUID  string        `json:"machineUid"`
-	Hostname    string        `json:"hostname"`
-	Online      bool          `json:"online"`
-	HasPassword bool          `json:"hasPassword"`
-	Password    string        `json:"password,omitempty"`
-	Monitors    []MonitorInfo `json:"monitors"`
-	InSession   bool          `json:"inSession"`
-	Technician  string        `json:"technicianName,omitempty"`
+	MachineUID string        `json:"machineUid"`
+	Hostname   string        `json:"hostname"`
+	Online     bool          `json:"online"`
+	Monitors   []MonitorInfo `json:"monitors"`
+	InSession  bool          `json:"inSession"`
+	Technician string        `json:"technicianName,omitempty"`
 }
 
 type Session struct {
@@ -115,7 +113,6 @@ type Message struct {
 	PairCode       string          `json:"pairCode,omitempty"`
 	MachineUID     string          `json:"machineUid,omitempty"`
 	Hostname       string          `json:"hostname,omitempty"`
-	Password       string          `json:"password,omitempty"`
 	TechnicianName string          `json:"technicianName,omitempty"`
 	SessionID      string          `json:"sessionId,omitempty"`
 	Session        *Session        `json:"session,omitempty"`

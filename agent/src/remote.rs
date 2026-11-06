@@ -1,16 +1,18 @@
-//! Controle remoto nativo (mouse/teclado via Enigo + Win32), captura multi-monitor de baixa latência,
-//! persistência de senha no Registro do Windows (HKCU\Software\ServiceDesk\Agent) e notificações nativas.
+//! Controle remoto nativo de ultra-baixa latência (3 threads desacopladas: WebSocket I/O, Input Worker e Capture Worker),
+//! captura 1:1 DPI-Aware com transporte binário WebSocket, multi-monitor e modelo de solicitação/permissão do usuário.
 
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use enigo::{Axis, Button, Direction, Enigo, Key, Keyboard, Mouse, Settings};
 #[cfg(not(target_os = "windows"))]
 use enigo::Coordinate;
-use jpeg_encoder::{ColorType, Encoder};
+use jpeg_encoder::{ColorType, Encoder, SamplingFactor};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
     net::TcpStream,
-    sync::mpsc,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc, Arc,
+    },
     time::{Duration, Instant},
 };
 use tungstenite::{stream::MaybeTlsStream, Message};
@@ -106,12 +108,6 @@ fn native_key(key: &str) -> Option<Key> {
     })
 }
 
-/// Gera uma senha aleatória legível de 8 caracteres alfanuméricos maiúsculos (ex: A7K9M2P4).
-pub fn generate_random_password() -> String {
-    let raw = uuid::Uuid::new_v4().simple().to_string().to_uppercase();
-    raw.chars().take(8).collect()
-}
-
 #[cfg(target_os = "windows")]
 mod win_platform {
     use super::*;
@@ -119,112 +115,23 @@ mod win_platform {
     use windows_sys::{
         core::BOOL,
         Win32::{
-            Foundation::{FALSE, LPARAM, RECT, TRUE},
+            Foundation::{FALSE, LPARAM, POINT, RECT, TRUE},
             Graphics::Gdi::{
                 BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
                 EnumDisplayMonitors, GetDC, GetDIBits, GetMonitorInfoW, ReleaseDC, SelectObject,
-                SetStretchBltMode, StretchBlt, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, COLORONCOLOR,
-                DIB_RGB_COLORS, HDC, HMONITOR, MONITORINFO, SRCCOPY,
+                SetBrushOrgEx, SetStretchBltMode, StretchBlt, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
+                DIB_RGB_COLORS, HALFTONE, HDC, HMONITOR, MONITORINFO, SRCCOPY,
             },
-            System::Registry::{
-                RegCloseKey, RegCreateKeyExW, RegQueryValueExW, RegSetValueExW, HKEY,
-                HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_OPTION_NON_VOLATILE, REG_SZ,
+            UI::WindowsAndMessaging::{
+                GetSystemMetrics, MessageBoxW, SetCursorPos, SetProcessDPIAware, IDYES,
+                MB_ICONQUESTION, MB_SETFOREGROUND, MB_TOPMOST, MB_YESNO, SM_CXSCREEN, SM_CYSCREEN,
             },
-            UI::WindowsAndMessaging::{GetSystemMetrics, SetCursorPos, SM_CXSCREEN, SM_CYSCREEN},
         },
     };
 
-    const REG_SUBKEY: &str = "Software\\ServiceDesk\\Agent\0";
-    const REG_VAL_PASS: &str = "RemotePassword\0";
-
-    fn to_wide(s: &str) -> Vec<u16> {
-        s.encode_utf16().collect()
-    }
-
-    pub fn read_registry_password() -> Option<String> {
+    pub fn enable_dpi_awareness() {
         unsafe {
-            let subkey = to_wide(REG_SUBKEY);
-            let val_name = to_wide(REG_VAL_PASS);
-            let mut hkey: HKEY = null_mut();
-            let mut disp: u32 = 0;
-            let status = RegCreateKeyExW(
-                HKEY_CURRENT_USER,
-                subkey.as_ptr(),
-                0,
-                null(),
-                REG_OPTION_NON_VOLATILE,
-                KEY_READ | KEY_WRITE,
-                null(),
-                &mut hkey,
-                &mut disp,
-            );
-            if status != 0 {
-                return None;
-            }
-            let mut buf = [0u16; 128];
-            let mut buf_bytes = (buf.len() * 2) as u32;
-            let mut reg_type: u32 = 0;
-            let q_status = RegQueryValueExW(
-                hkey,
-                val_name.as_ptr(),
-                null(),
-                &mut reg_type,
-                buf.as_mut_ptr() as *mut u8,
-                &mut buf_bytes,
-            );
-            RegCloseKey(hkey);
-            if q_status != 0 || reg_type != REG_SZ || buf_bytes < 2 {
-                return None;
-            }
-            let u16_len = (buf_bytes as usize / 2).saturating_sub(1);
-            let s = String::from_utf16_lossy(&buf[..u16_len]).trim().to_string();
-            if s.len() >= 4 {
-                Some(s)
-            } else {
-                None
-            }
-        }
-    }
-
-    pub fn write_registry_password(password: &str) -> Result<(), String> {
-        let trimmed = password.trim();
-        if trimmed.len() < 4 {
-            return Err("A senha deve ter pelo menos 4 caracteres".into());
-        }
-        unsafe {
-            let subkey = to_wide(REG_SUBKEY);
-            let val_name = to_wide(REG_VAL_PASS);
-            let mut hkey: HKEY = null_mut();
-            let mut disp: u32 = 0;
-            let status = RegCreateKeyExW(
-                HKEY_CURRENT_USER,
-                subkey.as_ptr(),
-                0,
-                null(),
-                REG_OPTION_NON_VOLATILE,
-                KEY_READ | KEY_WRITE,
-                null(),
-                &mut hkey,
-                &mut disp,
-            );
-            if status != 0 {
-                return Err(format!("Falha ao abrir chave no Registro do Windows (código {status})"));
-            }
-            let mut wide_val: Vec<u16> = trimmed.encode_utf16().collect();
-            wide_val.push(0);
-            let set_status = RegSetValueExW(
-                hkey,
-                val_name.as_ptr(),
-                0,
-                REG_SZ,
-                wide_val.as_ptr() as *const u8,
-                (wide_val.len() * 2) as u32,
-            );
-            RegCloseKey(hkey);
-            if set_status != 0 {
-                return Err(format!("Falha ao gravar senha no Registro do Windows (código {set_status})"));
-            }
-            Ok(())
+            SetProcessDPIAware();
         }
     }
 
@@ -258,6 +165,7 @@ mod win_platform {
     }
 
     pub fn enumerate_monitors() -> Vec<MonitorInfo> {
+        enable_dpi_awareness();
         let mut raw: Vec<MonitorInfo> = Vec::new();
         unsafe {
             EnumDisplayMonitors(
@@ -280,7 +188,6 @@ mod win_platform {
                 });
             }
         }
-        // Ordena: monitor principal primeiro, depois por coordenada X
         raw.sort_by(|a, b| b.primary.cmp(&a.primary).then_with(|| a.x.cmp(&b.x)));
         for (i, m) in raw.iter_mut().enumerate() {
             m.id = i;
@@ -335,7 +242,9 @@ mod win_platform {
                     SRCCOPY,
                 ) != FALSE
             } else {
-                SetStretchBltMode(hdc_mem, COLORONCOLOR);
+                SetStretchBltMode(hdc_mem, HALFTONE);
+                let mut pt: POINT = std::mem::zeroed();
+                SetBrushOrgEx(hdc_mem, 0, 0, &mut pt);
                 StretchBlt(
                     hdc_mem,
                     0,
@@ -368,7 +277,7 @@ mod win_platform {
                 bmiHeader: BITMAPINFOHEADER {
                     biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
                     biWidth: target_w,
-                    biHeight: -target_h, // top-down DIB
+                    biHeight: -target_h,
                     biPlanes: 1,
                     biBitCount: 32,
                     biCompression: BI_RGB,
@@ -378,7 +287,7 @@ mod win_platform {
                     biClrUsed: 0,
                     biClrImportant: 0,
                 },
-                bmiColors: [ std::mem::zeroed() ],
+                bmiColors: [std::mem::zeroed()],
             };
 
             let lines = GetDIBits(
@@ -422,42 +331,45 @@ mod win_platform {
                 .spawn();
         });
     }
+
+    /// Exibe uma janela nativa do Windows perguntando ao usuário da estação se ele permite o acesso remoto.
+    pub fn ask_user_consent(tech_name: &str) -> bool {
+        let title: Vec<u16> = "ServiceDesk — Solicitação de Acesso Remoto\0"
+            .encode_utf16()
+            .collect();
+        let body: Vec<u16> = format!(
+            "O técnico {tech_name} está solicitando permissão para acessar e controlar esta máquina remotamente.\n\nDeseja autorizar o acesso remoto agora?\0"
+        )
+        .encode_utf16()
+        .collect();
+        unsafe {
+            let res = MessageBoxW(
+                null_mut(),
+                body.as_ptr(),
+                title.as_ptr(),
+                MB_YESNO | MB_ICONQUESTION | MB_TOPMOST | MB_SETFOREGROUND,
+            );
+            res == IDYES
+        }
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
 mod win_platform {
     use super::*;
 
-    fn password_file() -> std::path::PathBuf {
-        std::env::temp_dir().join("servicedesk_remote_password.txt")
-    }
-
-    pub fn read_registry_password() -> Option<String> {
-        let s = std::fs::read_to_string(password_file()).ok()?;
-        let t = s.trim().to_string();
-        if t.len() >= 4 {
-            Some(t)
-        } else {
-            None
-        }
-    }
-
-    pub fn write_registry_password(password: &str) -> Result<(), String> {
-        let t = password.trim();
-        if t.len() < 4 {
-            return Err("A senha deve ter pelo menos 4 caracteres".into());
-        }
-        std::fs::write(password_file(), t).map_err(|e| e.to_string())
-    }
+    pub fn enable_dpi_awareness() {}
 
     pub fn enumerate_monitors() -> Vec<MonitorInfo> {
         #[cfg(target_os = "linux")]
         {
             use x11rb::{connection::Connection, protocol::randr::ConnectionExt};
             if let Ok((connection, screen)) = x11rb::connect(None) {
-                if let Ok(req) = connection.randr_get_monitors(connection.setup().roots[screen].root, true) {
+                if let Ok(req) =
+                    connection.randr_get_monitors(connection.setup().roots[screen].root, true)
+                {
                     if let Ok(reply) = req.reply() {
-                        let mut list: Vec<MonitorInfo> = reply
+                        let list: Vec<MonitorInfo> = reply
                             .monitors
                             .iter()
                             .enumerate()
@@ -503,27 +415,13 @@ mod win_platform {
     pub fn notify_os(title: &str, message: &str) {
         tracing::info!("[Notificação SO] {title}: {message}");
     }
-}
 
-pub fn load_or_create_password() -> String {
-    if let Some(existing) = win_platform::read_registry_password() {
-        return existing;
+    pub fn ask_user_consent(_tech_name: &str) -> bool {
+        true
     }
-    let generated = generate_random_password();
-    let _ = win_platform::write_registry_password(&generated);
-    generated
 }
 
-pub fn update_password(new_pass: &str) -> Result<String, String> {
-    let final_pass = if new_pass.trim().is_empty() {
-        generate_random_password()
-    } else {
-        new_pass.trim().to_string()
-    };
-    win_platform::write_registry_password(&final_pass)?;
-    Ok(final_pass)
-}
-
+#[cfg(test)]
 fn validate_layout(monitors: &[(i32, i32, i32, i32)]) -> Result<(i32, i32), String> {
     match monitors.first() {
         Some((_, _, w, h)) if *w > 0 && *h > 0 => Ok((*w, *h)),
@@ -548,8 +446,8 @@ impl FrameCapturer {
         }
     }
 
-    fn capture_jpeg_base64(&mut self, mon: &MonitorInfo, force: bool) -> Option<String> {
-        let max_w = 1366;
+    fn capture_binary_packet(&mut self, mon: &MonitorInfo, force: bool) -> Option<Vec<u8>> {
+        let max_w = 1920;
         let (target_w, target_h) = if mon.width > max_w {
             let scale = max_w as f64 / mon.width as f64;
             (max_w, ((mon.height as f64 * scale).round() as i32).max(1))
@@ -561,14 +459,16 @@ impl FrameCapturer {
             return None;
         }
 
-        // Hash rápido amostrado para evitar re-enviar quadros idênticos sem necessidade
         let mut hash: u64 = 14695981039346656037;
-        for chunk in self.bgra_buf.chunks(256) {
-            hash ^= chunk[0] as u64;
+        for chunk in self.bgra_buf.chunks(128) {
+            hash ^= (chunk[0] as u64)
+                | ((chunk[1] as u64) << 8)
+                | ((chunk[2] as u64) << 16);
             hash = hash.wrapping_mul(1099511628211);
         }
 
-        if !force && hash == self.last_hash && self.last_sent.elapsed() < Duration::from_millis(800) {
+        if !force && hash == self.last_hash && self.last_sent.elapsed() < Duration::from_millis(900)
+        {
             return None;
         }
         self.last_hash = hash;
@@ -578,19 +478,33 @@ impl FrameCapturer {
         if self.rgb_buf.len() != pixels * 3 {
             self.rgb_buf.resize(pixels * 3, 0);
         }
-        for (bgra, rgb) in self.bgra_buf.chunks_exact(4).zip(self.rgb_buf.chunks_exact_mut(3)) {
+        for (bgra, rgb) in self
+            .bgra_buf
+            .chunks_exact(4)
+            .zip(self.rgb_buf.chunks_exact_mut(3))
+        {
             rgb[0] = bgra[2];
             rgb[1] = bgra[1];
             rgb[2] = bgra[0];
         }
 
-        let mut jpeg_out = Vec::with_capacity(65536);
-        let encoder = Encoder::new(&mut jpeg_out, 68);
+        let mut packet = Vec::with_capacity(96 * 1024);
+        packet.extend_from_slice(&(mon.id as u16).to_be_bytes());
+        packet.extend_from_slice(&(target_w as u16).to_be_bytes());
+        packet.extend_from_slice(&(target_h as u16).to_be_bytes());
+
+        let mut encoder = Encoder::new(&mut packet, 84);
+        encoder.set_sampling_factor(SamplingFactor::R_4_4_4);
         encoder
-            .encode(&self.rgb_buf, target_w as u16, target_h as u16, ColorType::Rgb)
+            .encode(
+                &self.rgb_buf,
+                target_w as u16,
+                target_h as u16,
+                ColorType::Rgb,
+            )
             .ok()?;
 
-        Some(BASE64.encode(&jpeg_out))
+        Some(packet)
     }
 }
 
@@ -658,8 +572,7 @@ impl Driver {
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
-                    self.enigo
-                        .move_mouse(target_x, target_y, Coordinate::Abs)
+                    self.enigo.move_mouse(target_x, target_y, Coordinate::Abs)
                 }
             }
             Input::Button { button, down } => {
@@ -719,6 +632,133 @@ impl Drop for Driver {
     }
 }
 
+enum InputCmd {
+    Exec(Input),
+    SelectMonitor(usize),
+    Stop,
+}
+
+struct ActiveSessionWorkers {
+    input_tx: mpsc::Sender<InputCmd>,
+    frame_rx: mpsc::Receiver<Vec<u8>>,
+    running: Arc<AtomicBool>,
+    force_frame: Arc<AtomicBool>,
+}
+
+impl ActiveSessionWorkers {
+    fn start(initial_monitors: Vec<MonitorInfo>) -> Result<Self, String> {
+        let test_driver = Driver::new()?;
+        drop(test_driver);
+
+        let running = Arc::new(AtomicBool::new(true));
+        let active_monitor = Arc::new(AtomicUsize::new(0));
+        let force_frame = Arc::new(AtomicBool::new(true));
+
+        let (input_tx, input_rx) = mpsc::channel::<InputCmd>();
+        let (frame_tx, frame_rx) = mpsc::sync_channel::<Vec<u8>>(1);
+
+        let mon_for_input = active_monitor.clone();
+        let run_for_input = running.clone();
+        std::thread::spawn(move || {
+            let mut driver = match Driver::new() {
+                Ok(d) => d,
+                Err(_) => return,
+            };
+            while run_for_input.load(Ordering::Relaxed) {
+                let first = match input_rx.recv_timeout(Duration::from_millis(50)) {
+                    Ok(cmd) => cmd,
+                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                };
+
+                let mut pending_move: Option<Input> = None;
+                let process_cmd = |cmd: InputCmd, d: &mut Driver, pm: &mut Option<Input>| -> bool {
+                    match cmd {
+                        InputCmd::Exec(Input::Move { x, y }) => {
+                            *pm = Some(Input::Move { x, y });
+                            true
+                        }
+                        InputCmd::Exec(other) => {
+                            if let Some(mv) = pm.take() {
+                                let _ = d.execute(mv);
+                            }
+                            let _ = d.execute(other);
+                            true
+                        }
+                        InputCmd::SelectMonitor(id) => {
+                            let mon = d.select_monitor(id);
+                            mon_for_input.store(mon.id, Ordering::Relaxed);
+                            true
+                        }
+                        InputCmd::Stop => false,
+                    }
+                };
+
+                if !process_cmd(first, &mut driver, &mut pending_move) {
+                    break;
+                }
+                while let Ok(next_cmd) = input_rx.try_recv() {
+                    if !process_cmd(next_cmd, &mut driver, &mut pending_move) {
+                        return;
+                    }
+                }
+                if let Some(mv) = pending_move.take() {
+                    let _ = driver.execute(mv);
+                }
+            }
+        });
+
+        let mon_for_cap = active_monitor.clone();
+        let run_for_cap = running.clone();
+        let force_for_cap = force_frame.clone();
+        std::thread::spawn(move || {
+            let mut capturer = FrameCapturer::new();
+            let mut monitors = if initial_monitors.is_empty() {
+                win_platform::enumerate_monitors()
+            } else {
+                initial_monitors
+            };
+            let target_interval = Duration::from_millis(30); // ~33 FPS
+
+            while run_for_cap.load(Ordering::Relaxed) {
+                let started = Instant::now();
+                let idx = mon_for_cap.load(Ordering::Relaxed);
+                if idx >= monitors.len() {
+                    monitors = win_platform::enumerate_monitors();
+                }
+                if let Some(mon) = monitors.get(idx).or_else(|| monitors.first()) {
+                    let force = force_for_cap.swap(false, Ordering::Relaxed);
+                    if let Some(packet) = capturer.capture_binary_packet(mon, force) {
+                        let _ = frame_tx.try_send(packet);
+                    }
+                }
+                let elapsed = started.elapsed();
+                if elapsed < target_interval {
+                    std::thread::sleep(target_interval - elapsed);
+                }
+            }
+        });
+
+        Ok(Self {
+            input_tx,
+            frame_rx,
+            running,
+            force_frame,
+        })
+    }
+
+    fn stop(&mut self) {
+        self.running.store(false, Ordering::Relaxed);
+        let _ = self.input_tx.send(InputCmd::Stop);
+    }
+}
+
+impl Drop for ActiveSessionWorkers {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
 fn tcp(stream: &MaybeTlsStream<TcpStream>) -> Option<&TcpStream> {
     match stream {
         MaybeTlsStream::Plain(s) => Some(s),
@@ -728,21 +768,20 @@ fn tcp(stream: &MaybeTlsStream<TcpStream>) -> Option<&TcpStream> {
 }
 
 fn connection(url: &str, machine_uid: &str, hostname: &str) -> Result<(), Box<dyn std::error::Error>> {
+    win_platform::enable_dpi_awareness();
     let (mut socket, _) = tungstenite::connect(url)?;
     if let Some(tcp_stream) = tcp(socket.get_ref()) {
-        // Desabilita o algoritmo de Nagle para resposta imediata de mouse/teclado (< 1ms)
         let _ = tcp_stream.set_nodelay(true);
-        tcp_stream.set_read_timeout(Some(Duration::from_millis(12)))?;
+        tcp_stream.set_read_timeout(Some(Duration::from_millis(2)))?;
         tcp_stream.set_write_timeout(Some(Duration::from_secs(3)))?;
     }
     socket.set_config(|config| {
-        config.max_message_size = Some(4 * 1024 * 1024);
-        config.max_frame_size = Some(4 * 1024 * 1024);
+        config.max_message_size = Some(8 * 1024 * 1024);
+        config.max_frame_size = Some(8 * 1024 * 1024);
     });
 
     let code = uuid::Uuid::new_v4().simple().to_string();
-    let mut password = load_or_create_password();
-    let monitors = win_platform::enumerate_monitors();
+    let mut monitors = win_platform::enumerate_monitors();
 
     socket.send(Message::Text(
         json!({
@@ -750,7 +789,6 @@ fn connection(url: &str, machine_uid: &str, hostname: &str) -> Result<(), Box<dy
             "pairCode": code,
             "machineUid": machine_uid,
             "hostname": hostname,
-            "password": password,
             "monitors": monitors,
         })
         .to_string()
@@ -758,14 +796,55 @@ fn connection(url: &str, machine_uid: &str, hostname: &str) -> Result<(), Box<dy
     ))?;
 
     let mut grant = Grant::default();
-    let mut driver: Option<Driver> = None;
-    let mut capturer = FrameCapturer::new();
-    let mut last_frame_at = Instant::now() - Duration::from_secs(1);
-    let mut force_next_frame = true;
+    let mut workers: Option<ActiveSessionWorkers> = None;
+    let (consent_tx, consent_rx) = mpsc::channel::<(String, String, bool)>();
 
     loop {
-        // 1. Drena todos os eventos recebidos e faz coalescing de movimentos de mouse acumulados
-        let mut pending_move: Option<(String, Input)> = None;
+        // 1. Verifica se o usuário respondeu à caixa de diálogo nativa de permissão
+        while let Ok((session_id, tech_name, accepted)) = consent_rx.try_recv() {
+            if accepted {
+                monitors = win_platform::enumerate_monitors();
+                match ActiveSessionWorkers::start(monitors.clone()) {
+                    Ok(w) => {
+                        workers = Some(w);
+                        grant.session = session_id.clone();
+                        socket.send(Message::Text(
+                            json!({
+                                "type": "ready",
+                                "sessionId": session_id,
+                                "monitors": monitors,
+                                "activeMonitor": 0,
+                            })
+                            .to_string()
+                            .into(),
+                        ))?;
+                        win_platform::notify_os(
+                            "ServiceDesk — Acesso Remoto em Andamento",
+                            &format!("O técnico {tech_name} está conectado a esta máquina."),
+                        );
+                    }
+                    Err(e) => {
+                        socket.send(Message::Text(
+                            json!({"type": "error", "sessionId": session_id, "error": e})
+                                .to_string()
+                                .into(),
+                        ))?;
+                    }
+                }
+            } else {
+                socket.send(Message::Text(
+                    json!({
+                        "type": "consent_denied",
+                        "sessionId": session_id,
+                        "error": "O usuário da estação recusou a solicitação de acesso remoto."
+                    })
+                    .to_string()
+                    .into(),
+                ))?;
+            }
+        }
+
+        // 2. Lê comandos do servidor sem bloquear nas capturas de vídeo
         loop {
             match socket.read() {
                 Ok(Message::Text(text)) => {
@@ -779,65 +858,46 @@ fn connection(url: &str, machine_uid: &str, hostname: &str) -> Result<(), Box<dy
                             println!(
                                 "\n============================================================\n\
                                  ACESSO REMOTO ATIVO — Estação: {hostname} ({machine_uid})\n\
-                                 Senha de Acesso Remoto (Salva no Registro): {password}\n\
-                                 Chave: HKEY_CURRENT_USER\\Software\\ServiceDesk\\Agent\\RemotePassword\n\
-                                 Monitores detectados: {}\n\
+                                 Modo: Solicitação e Permissão do Usuário\n\
+                                 Monitores detectados (1:1 Full HD): {}\n\
                                  ============================================================\n",
                                 monitors.len()
                             );
                         }
-                        "set_password" => {
-                            let requested = m["password"].as_str().unwrap_or("");
-                            match update_password(requested) {
-                                Ok(new_pass) => {
-                                    password = new_pass.clone();
-                                    tracing::info!("Senha de acesso remoto atualizada no Registro do Windows: {password}");
-                                    win_platform::notify_os(
-                                        "ServiceDesk — Senha Remota Alterada",
-                                        "A senha de acesso remoto desta estação foi atualizada pelo administrador.",
-                                    );
-                                    socket.send(Message::Text(
-                                        json!({
-                                            "type": "password_updated",
-                                            "machineUid": machine_uid,
-                                            "password": password,
-                                        })
-                                        .to_string()
-                                        .into(),
-                                    ))?;
-                                }
-                                Err(e) => {
-                                    socket.send(Message::Text(
-                                        json!({
-                                            "type": "error",
-                                            "error": e,
-                                        })
-                                        .to_string()
-                                        .into(),
-                                    ))?;
-                                }
-                            }
+                        "prompt_consent" if !session.is_empty() => {
+                            let tech_name = m["technicianName"]
+                                .as_str()
+                                .unwrap_or("Técnico")
+                                .to_string();
+                            win_platform::notify_os(
+                                "ServiceDesk — Solicitação de Acesso Remoto",
+                                &format!("O técnico {tech_name} solicitou acesso remoto a esta estação."),
+                            );
+                            let tx = consent_tx.clone();
+                            let sess_clone = session.clone();
+                            std::thread::spawn(move || {
+                                let accepted = win_platform::ask_user_consent(&tech_name);
+                                let _ = tx.send((sess_clone, tech_name, accepted));
+                            });
                         }
                         "grant" if !session.is_empty() => {
                             let tech_name = m["technicianName"].as_str().unwrap_or("Técnico");
-                            match Driver::new() {
-                                Ok(d) => {
-                                    let mons = d.monitors.clone();
-                                    let active = d.active_monitor;
-                                    driver = Some(d);
+                            monitors = win_platform::enumerate_monitors();
+                            match ActiveSessionWorkers::start(monitors.clone()) {
+                                Ok(w) => {
+                                    workers = Some(w);
                                     grant.session = session.clone();
-                                    force_next_frame = true;
                                     socket.send(Message::Text(
                                         json!({
                                             "type": "ready",
                                             "sessionId": session,
-                                            "monitors": mons,
-                                            "activeMonitor": active,
+                                            "monitors": monitors,
+                                            "activeMonitor": 0,
                                         })
                                         .to_string()
                                         .into(),
                                     ))?;
-                                    tracing::warn!("Acesso remoto INICIADO por {tech_name} — sessão {session}");
+                                    tracing::warn!("Acesso remoto AUTORIZADO para {tech_name} — sessão {session}");
                                     win_platform::notify_os(
                                         "ServiceDesk — Acesso Remoto em Andamento",
                                         &format!("O técnico {tech_name} conectou remotamente a esta máquina."),
@@ -853,25 +913,31 @@ fn connection(url: &str, machine_uid: &str, hostname: &str) -> Result<(), Box<dy
                             }
                         }
                         "select_monitor" if grant.allows(&session) => {
-                            if let Some(d) = driver.as_mut() {
-                                let monitor_id = m["monitorId"].as_u64().unwrap_or(0) as usize;
-                                let mon = d.select_monitor(monitor_id).clone();
-                                force_next_frame = true;
-                                socket.send(Message::Text(
-                                    json!({
-                                        "type": "monitor_selected",
-                                        "sessionId": session,
-                                        "activeMonitor": mon.id,
-                                        "monitors": d.monitors,
-                                    })
-                                    .to_string()
-                                    .into(),
-                                ))?;
+                            let monitor_id = m["monitorId"].as_u64().unwrap_or(0) as usize;
+                            monitors = win_platform::enumerate_monitors();
+                            let valid_id = if monitor_id < monitors.len() {
+                                monitor_id
+                            } else {
+                                0
+                            };
+                            if let Some(w) = workers.as_ref() {
+                                let _ = w.input_tx.send(InputCmd::SelectMonitor(valid_id));
+                                w.force_frame.store(true, Ordering::Relaxed);
                             }
+                            socket.send(Message::Text(
+                                json!({
+                                    "type": "monitor_selected",
+                                    "sessionId": session,
+                                    "activeMonitor": valid_id,
+                                    "monitors": monitors,
+                                })
+                                .to_string()
+                                .into(),
+                            ))?;
                         }
                         "revoke" if grant.allows(&session) => {
                             grant.session.clear();
-                            driver = None;
+                            workers = None;
                             tracing::info!("Acesso remoto encerrado");
                             win_platform::notify_os(
                                 "ServiceDesk — Acesso Remoto Encerrado",
@@ -880,32 +946,14 @@ fn connection(url: &str, machine_uid: &str, hostname: &str) -> Result<(), Box<dy
                         }
                         "input" if grant.allows(&session) => {
                             match serde_json::from_value::<Input>(m["input"].clone()) {
-                                Ok(Input::Move { x, y }) => {
-                                    // Coalescing: guarda apenas o último Move da fila
-                                    pending_move = Some((session, Input::Move { x, y }));
-                                }
-                                Ok(other_input) => {
-                                    // Antes de clicar ou digitar, aplica o último Move pendente imediatamente
-                                    if let Some((_, mv)) = pending_move.take() {
-                                        if let Some(d) = driver.as_mut() {
-                                            let _ = d.execute(mv);
-                                        }
-                                    }
-                                    let res = driver
-                                        .as_mut()
-                                        .ok_or_else(|| "Sem autorização local".to_string())
-                                        .and_then(|d| d.execute(other_input));
-                                    if let Err(e) = res {
-                                        socket.send(Message::Text(
-                                            json!({"type": "error", "sessionId": session, "error": e})
-                                                .to_string()
-                                                .into(),
-                                        ))?;
+                                Ok(inp) if inp.valid() => {
+                                    if let Some(w) = workers.as_ref() {
+                                        let _ = w.input_tx.send(InputCmd::Exec(inp));
                                     }
                                 }
-                                Err(e) => {
+                                _ => {
                                     socket.send(Message::Text(
-                                        json!({"type": "error", "sessionId": session, "error": e.to_string()})
+                                        json!({"type": "error", "sessionId": session, "error": "Evento de entrada inválido"})
                                             .to_string()
                                             .into(),
                                     ))?;
@@ -930,42 +978,15 @@ fn connection(url: &str, machine_uid: &str, hostname: &str) -> Result<(), Box<dy
             }
         }
 
-        // Executa o movimento de mouse mais recente coalescido
-        if let Some((session, mv)) = pending_move.take() {
-            if grant.allows(&session) {
-                if let Some(d) = driver.as_mut() {
-                    if let Err(e) = d.execute(mv) {
-                        socket.send(Message::Text(
-                            json!({"type": "error", "sessionId": session, "error": e})
-                                .to_string()
-                                .into(),
-                        ))?;
-                    }
+        // 3. Envia quadro binário pronto da thread de captura (zero lag)
+        if !grant.session.is_empty() {
+            if let Some(w) = workers.as_ref() {
+                if let Ok(packet) = w.frame_rx.try_recv() {
+                    let _ = socket.send(Message::Binary(packet.into()));
                 }
             }
-        }
-
-        // 2. Se houver sessão ativa, captura frame nativo do monitor selecionado (~25 FPS)
-        if !grant.session.is_empty() && last_frame_at.elapsed() >= Duration::from_millis(38) {
-            if let Some(d) = driver.as_ref() {
-                let mon = d.current_monitor();
-                if let Some(frame_b64) = capturer.capture_jpeg_base64(mon, force_next_frame) {
-                    force_next_frame = false;
-                    let _ = socket.send(Message::Text(
-                        json!({
-                            "type": "frame",
-                            "sessionId": grant.session,
-                            "monitorId": mon.id,
-                            "width": mon.width,
-                            "height": mon.height,
-                            "frame": frame_b64,
-                        })
-                        .to_string()
-                        .into(),
-                    ));
-                }
-                last_frame_at = Instant::now();
-            }
+        } else {
+            std::thread::sleep(Duration::from_millis(15));
         }
     }
 }
@@ -981,7 +1002,6 @@ fn derive_remote_ws_url(grpc_url: &str) -> String {
             return explicit2;
         }
     }
-    // Extrai o IP/host do SERVER_GO_GRPC_URL (ex: http://192.168.1.10:50051 -> ws://192.168.1.10:8081/api/remoto/agente/ws)
     let stripped = grpc_url
         .trim()
         .trim_start_matches("http://")
@@ -992,13 +1012,11 @@ fn derive_remote_ws_url(grpc_url: &str) -> String {
 }
 
 pub fn start(machine_uid: String, hostname: String, server_go_grpc_url: &str) {
-    // Ativo por padrão, a menos que explicitamente desabilitado com REMOTE_CONTROL_ENABLED=false
     if std::env::var("REMOTE_CONTROL_ENABLED").as_deref() == Ok("false") {
         tracing::info!("Acesso remoto desabilitado via REMOTE_CONTROL_ENABLED=false");
         return;
     }
     let url = derive_remote_ws_url(server_go_grpc_url);
-    let _ = mpsc::channel::<()>();
     std::thread::spawn(move || loop {
         if let Err(e) = connection(&url, &machine_uid, &hostname) {
             tracing::warn!("Conexão de acesso remoto encerrada ({url}): {e}");
@@ -1060,10 +1078,5 @@ mod tests {
     fn maps_coordinates_to_last_pixel() {
         assert_eq!(position(1.0, 1920), 1919);
         assert_eq!(position(0.0, 1920), 0);
-    }
-    #[test]
-    fn generates_and_persists_registry_password() {
-        let pass = load_or_create_password();
-        assert!(pass.len() >= 4);
     }
 }
