@@ -629,6 +629,15 @@ func (s *Server) machineWS(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	s.read(p, func(m Message) {
+		if m.Type == "ping" {
+			s.mu.Lock()
+			agent := v.agent
+			s.mu.Unlock()
+			if agent == nil || agent.send(Message{Type: "ping", SessionID: v.ID, Ts: m.Ts}) != nil {
+				p.send(Message{Type: "pong", Ts: m.Ts})
+			}
+			return
+		}
 		if m.Type == "input" {
 			s.mu.Lock()
 			active := s.machineSessions[uid] == v && v.Sharing && v.Control
@@ -703,6 +712,16 @@ func (s *Server) ticketWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	s.read(p, func(m Message) {
+		if m.Type == "ping" {
+			s.mu.Lock()
+			agent := v.agent
+			tech := p == v.technician
+			s.mu.Unlock()
+			if !tech || agent == nil || agent.send(Message{Type: "ping", SessionID: v.ID, Ts: m.Ts}) != nil {
+				p.send(Message{Type: "pong", Ts: m.Ts})
+			}
+			return
+		}
 		if m.Type == "input" {
 			s.mu.Lock()
 			tech := p == v.technician
@@ -1064,6 +1083,10 @@ func (s *Server) agentWS(w http.ResponseWriter, r *http.Request) {
 		for _, v := range allSessions {
 			if v.agent == p && v.ID == m.SessionID {
 				switch m.Type {
+				case "pong":
+					if v.technician != nil {
+						_ = v.technician.send(Message{Type: "pong", Ts: m.Ts})
+					}
 				case "ready":
 					if v.agentPending {
 						v.Sharing = true

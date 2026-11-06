@@ -11,11 +11,16 @@ use std::{
     net::TcpStream,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        mpsc, Arc,
+        mpsc, Arc, Mutex,
     },
     time::{Duration, Instant},
 };
 use tungstenite::{stream::MaybeTlsStream, Message};
+
+/// Intervalo alvo entre capturas (25 ms ≈ 40 FPS máximos).
+const CAPTURE_INTERVAL_MS: u64 = 25;
+/// Quantidade de threads de codificação JPEG paralelas.
+const ENCODER_THREADS: usize = 2;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MonitorInfo {
@@ -117,10 +122,10 @@ mod win_platform {
         Win32::{
             Foundation::{FALSE, LPARAM, POINT, RECT, TRUE},
             Graphics::Gdi::{
-                BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
-                EnumDisplayMonitors, GetDC, GetDIBits, GetMonitorInfoW, ReleaseDC, SelectObject,
+                BitBlt, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject,
+                EnumDisplayMonitors, GdiFlush, GetDC, GetMonitorInfoW, ReleaseDC, SelectObject,
                 SetBrushOrgEx, SetStretchBltMode, StretchBlt, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
-                DIB_RGB_COLORS, HALFTONE, HDC, HMONITOR, MONITORINFO, SRCCOPY,
+                DIB_RGB_COLORS, HALFTONE, HBITMAP, HDC, HGDIOBJ, HMONITOR, MONITORINFO, SRCCOPY,
             },
             UI::WindowsAndMessaging::{
                 GetSystemMetrics, MessageBoxW, SetCursorPos, SetProcessDPIAware, IDYES,
@@ -206,106 +211,167 @@ mod win_platform {
         }
     }
 
-    pub fn capture_monitor_bgra(
-        mon: &MonitorInfo,
-        target_w: i32,
-        target_h: i32,
-        out_bgra: &mut Vec<u8>,
-    ) -> bool {
-        unsafe {
-            let hdc_screen = GetDC(null_mut());
-            if hdc_screen.is_null() {
+    /// Capturador persistente: mantém o DC de tela, o DC de memória e a DIB Section entre os quadros,
+    /// evitando alocar e liberar um bitmap de ~8 MB por frame (principal gargalo de FPS do GDI).
+    pub struct Grabber {
+        hdc_screen: HDC,
+        hdc_mem: HDC,
+        hbm: HBITMAP,
+        old_obj: HGDIOBJ,
+        bits: *mut core::ffi::c_void,
+        w: i32,
+        h: i32,
+    }
+
+    impl Grabber {
+        pub fn new() -> Self {
+            Self {
+                hdc_screen: null_mut(),
+                hdc_mem: null_mut(),
+                hbm: null_mut(),
+                old_obj: null_mut(),
+                bits: null_mut(),
+                w: 0,
+                h: 0,
+            }
+        }
+
+        fn release_bitmap(&mut self) {
+            unsafe {
+                if !self.hdc_mem.is_null() && !self.old_obj.is_null() {
+                    SelectObject(self.hdc_mem, self.old_obj);
+                }
+                if !self.hbm.is_null() {
+                    DeleteObject(self.hbm as _);
+                }
+            }
+            self.hbm = null_mut();
+            self.old_obj = null_mut();
+            self.bits = null_mut();
+            self.w = 0;
+            self.h = 0;
+        }
+
+        fn ensure(&mut self, w: i32, h: i32) -> bool {
+            unsafe {
+                if self.hdc_screen.is_null() {
+                    self.hdc_screen = GetDC(null_mut());
+                    if self.hdc_screen.is_null() {
+                        return false;
+                    }
+                }
+                if self.hdc_mem.is_null() {
+                    self.hdc_mem = CreateCompatibleDC(self.hdc_screen);
+                    if self.hdc_mem.is_null() {
+                        return false;
+                    }
+                }
+                if !self.hbm.is_null() && self.w == w && self.h == h {
+                    return true;
+                }
+                self.release_bitmap();
+                let bi = BITMAPINFO {
+                    bmiHeader: BITMAPINFOHEADER {
+                        biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                        biWidth: w,
+                        biHeight: -h,
+                        biPlanes: 1,
+                        biBitCount: 32,
+                        biCompression: BI_RGB,
+                        biSizeImage: 0,
+                        biXPelsPerMeter: 0,
+                        biYPelsPerMeter: 0,
+                        biClrUsed: 0,
+                        biClrImportant: 0,
+                    },
+                    bmiColors: [std::mem::zeroed()],
+                };
+                let mut bits: *mut core::ffi::c_void = null_mut();
+                let hbm = CreateDIBSection(
+                    self.hdc_screen,
+                    &bi,
+                    DIB_RGB_COLORS,
+                    &mut bits,
+                    null_mut(),
+                    0,
+                );
+                if hbm.is_null() || bits.is_null() {
+                    return false;
+                }
+                self.old_obj = SelectObject(self.hdc_mem, hbm as _);
+                self.hbm = hbm;
+                self.bits = bits;
+                self.w = w;
+                self.h = h;
+                true
+            }
+        }
+
+        /// Copia o monitor para `out` em BGRA (4 bytes/pixel), escalando apenas se necessário.
+        pub fn capture(
+            &mut self,
+            mon: &MonitorInfo,
+            target_w: i32,
+            target_h: i32,
+            out: &mut Vec<u8>,
+        ) -> bool {
+            if !self.ensure(target_w, target_h) {
                 return false;
             }
-            let hdc_mem = CreateCompatibleDC(hdc_screen);
-            if hdc_mem.is_null() {
-                ReleaseDC(null_mut(), hdc_screen);
-                return false;
+            unsafe {
+                let ok = if target_w == mon.width && target_h == mon.height {
+                    BitBlt(
+                        self.hdc_mem,
+                        0,
+                        0,
+                        target_w,
+                        target_h,
+                        self.hdc_screen,
+                        mon.x,
+                        mon.y,
+                        SRCCOPY,
+                    ) != FALSE
+                } else {
+                    SetStretchBltMode(self.hdc_mem, HALFTONE);
+                    let mut pt: POINT = std::mem::zeroed();
+                    SetBrushOrgEx(self.hdc_mem, 0, 0, &mut pt);
+                    StretchBlt(
+                        self.hdc_mem,
+                        0,
+                        0,
+                        target_w,
+                        target_h,
+                        self.hdc_screen,
+                        mon.x,
+                        mon.y,
+                        mon.width,
+                        mon.height,
+                        SRCCOPY,
+                    ) != FALSE
+                };
+                if !ok {
+                    return false;
+                }
+                GdiFlush();
+                let len = (target_w as usize) * (target_h as usize) * 4;
+                out.clear();
+                out.extend_from_slice(std::slice::from_raw_parts(self.bits as *const u8, len));
+                true
             }
-            let hbm = CreateCompatibleBitmap(hdc_screen, target_w, target_h);
-            if hbm.is_null() {
-                DeleteDC(hdc_mem);
-                ReleaseDC(null_mut(), hdc_screen);
-                return false;
+        }
+    }
+
+    impl Drop for Grabber {
+        fn drop(&mut self) {
+            self.release_bitmap();
+            unsafe {
+                if !self.hdc_mem.is_null() {
+                    DeleteDC(self.hdc_mem);
+                }
+                if !self.hdc_screen.is_null() {
+                    ReleaseDC(null_mut(), self.hdc_screen);
+                }
             }
-            let old_obj = SelectObject(hdc_mem, hbm as _);
-            let ok = if target_w == mon.width && target_h == mon.height {
-                BitBlt(
-                    hdc_mem,
-                    0,
-                    0,
-                    target_w,
-                    target_h,
-                    hdc_screen,
-                    mon.x,
-                    mon.y,
-                    SRCCOPY,
-                ) != FALSE
-            } else {
-                SetStretchBltMode(hdc_mem, HALFTONE);
-                let mut pt: POINT = std::mem::zeroed();
-                SetBrushOrgEx(hdc_mem, 0, 0, &mut pt);
-                StretchBlt(
-                    hdc_mem,
-                    0,
-                    0,
-                    target_w,
-                    target_h,
-                    hdc_screen,
-                    mon.x,
-                    mon.y,
-                    mon.width,
-                    mon.height,
-                    SRCCOPY,
-                ) != FALSE
-            };
-
-            if !ok {
-                SelectObject(hdc_mem, old_obj);
-                DeleteObject(hbm as _);
-                DeleteDC(hdc_mem);
-                ReleaseDC(null_mut(), hdc_screen);
-                return false;
-            }
-
-            let len = (target_w as usize) * (target_h as usize) * 4;
-            if out_bgra.len() != len {
-                out_bgra.resize(len, 0);
-            }
-
-            let mut bi = BITMAPINFO {
-                bmiHeader: BITMAPINFOHEADER {
-                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                    biWidth: target_w,
-                    biHeight: -target_h,
-                    biPlanes: 1,
-                    biBitCount: 32,
-                    biCompression: BI_RGB,
-                    biSizeImage: 0,
-                    biXPelsPerMeter: 0,
-                    biYPelsPerMeter: 0,
-                    biClrUsed: 0,
-                    biClrImportant: 0,
-                },
-                bmiColors: [std::mem::zeroed()],
-            };
-
-            let lines = GetDIBits(
-                hdc_mem,
-                hbm,
-                0,
-                target_h as u32,
-                out_bgra.as_mut_ptr() as *mut _,
-                &mut bi,
-                DIB_RGB_COLORS,
-            );
-
-            SelectObject(hdc_mem, old_obj);
-            DeleteObject(hbm as _);
-            DeleteDC(hdc_mem);
-            ReleaseDC(null_mut(), hdc_screen);
-
-            lines > 0
         }
     }
 
@@ -403,13 +469,22 @@ mod win_platform {
 
     pub fn move_cursor_abs(_x: i32, _y: i32) {}
 
-    pub fn capture_monitor_bgra(
-        _mon: &MonitorInfo,
-        _target_w: i32,
-        _target_h: i32,
-        _out_bgra: &mut Vec<u8>,
-    ) -> bool {
-        false
+    pub struct Grabber;
+
+    impl Grabber {
+        pub fn new() -> Self {
+            Self
+        }
+
+        pub fn capture(
+            &mut self,
+            _mon: &MonitorInfo,
+            _target_w: i32,
+            _target_h: i32,
+            _out: &mut Vec<u8>,
+        ) -> bool {
+            false
+        }
     }
 
     pub fn notify_os(title: &str, message: &str) {
@@ -429,24 +504,34 @@ fn validate_layout(monitors: &[(i32, i32, i32, i32)]) -> Result<(i32, i32), Stri
     }
 }
 
+/// Quadro bruto (BGRA) capturado da tela, aguardando codificação JPEG.
+struct RawFrame {
+    seq: u64,
+    mon_id: usize,
+    width: i32,
+    height: i32,
+    bgra: Vec<u8>,
+}
+
 struct FrameCapturer {
-    bgra_buf: Vec<u8>,
-    rgb_buf: Vec<u8>,
+    grabber: win_platform::Grabber,
     last_hash: u64,
     last_sent: Instant,
+    seq: u64,
 }
 
 impl FrameCapturer {
     fn new() -> Self {
         Self {
-            bgra_buf: Vec::new(),
-            rgb_buf: Vec::new(),
+            grabber: win_platform::Grabber::new(),
             last_hash: 0,
             last_sent: Instant::now() - Duration::from_secs(10),
+            seq: 0,
         }
     }
 
-    fn capture_binary_packet(&mut self, mon: &MonitorInfo, force: bool) -> Option<Vec<u8>> {
+    /// Captura o monitor reaproveitando o buffer `buf`; devolve `None` quando a tela não mudou.
+    fn capture_raw(&mut self, mon: &MonitorInfo, force: bool, buf: &mut Vec<u8>) -> Option<RawFrame> {
         let max_w = 1920;
         let (target_w, target_h) = if mon.width > max_w {
             let scale = max_w as f64 / mon.width as f64;
@@ -455,12 +540,12 @@ impl FrameCapturer {
             (mon.width.max(1), mon.height.max(1))
         };
 
-        if !win_platform::capture_monitor_bgra(mon, target_w, target_h, &mut self.bgra_buf) {
+        if !self.grabber.capture(mon, target_w, target_h, buf) {
             return None;
         }
 
         let mut hash: u64 = 14695981039346656037;
-        for chunk in self.bgra_buf.chunks(128) {
+        for chunk in buf.chunks(128) {
             hash ^= (chunk[0] as u64)
                 | ((chunk[1] as u64) << 8)
                 | ((chunk[2] as u64) << 16);
@@ -473,39 +558,38 @@ impl FrameCapturer {
         }
         self.last_hash = hash;
         self.last_sent = Instant::now();
+        self.seq += 1;
 
-        let pixels = (target_w as usize) * (target_h as usize);
-        if self.rgb_buf.len() != pixels * 3 {
-            self.rgb_buf.resize(pixels * 3, 0);
-        }
-        for (bgra, rgb) in self
-            .bgra_buf
-            .chunks_exact(4)
-            .zip(self.rgb_buf.chunks_exact_mut(3))
-        {
-            rgb[0] = bgra[2];
-            rgb[1] = bgra[1];
-            rgb[2] = bgra[0];
-        }
-
-        let mut packet = Vec::with_capacity(96 * 1024);
-        packet.extend_from_slice(&(mon.id as u16).to_be_bytes());
-        packet.extend_from_slice(&(target_w as u16).to_be_bytes());
-        packet.extend_from_slice(&(target_h as u16).to_be_bytes());
-
-        let mut encoder = Encoder::new(&mut packet, 84);
-        encoder.set_sampling_factor(SamplingFactor::R_4_4_4);
-        encoder
-            .encode(
-                &self.rgb_buf,
-                target_w as u16,
-                target_h as u16,
-                ColorType::Rgb,
-            )
-            .ok()?;
-
-        Some(packet)
+        Some(RawFrame {
+            seq: self.seq,
+            mon_id: mon.id,
+            width: target_w,
+            height: target_h,
+            bgra: std::mem::take(buf),
+        })
     }
+}
+
+/// Codifica o quadro BGRA diretamente em JPEG (sem conversão intermediária para RGB) e monta o pacote binário:
+/// [monitor_id u16][largura u16][altura u16][bytes JPEG].
+fn encode_packet(frame: &RawFrame) -> Option<Vec<u8>> {
+    let mut packet = Vec::with_capacity(192 * 1024);
+    packet.extend_from_slice(&(frame.mon_id as u16).to_be_bytes());
+    packet.extend_from_slice(&(frame.width as u16).to_be_bytes());
+    packet.extend_from_slice(&(frame.height as u16).to_be_bytes());
+
+    let mut encoder = Encoder::new(&mut packet, 84);
+    encoder.set_sampling_factor(SamplingFactor::R_4_4_4);
+    encoder
+        .encode(
+            &frame.bgra,
+            frame.width as u16,
+            frame.height as u16,
+            ColorType::Bgra,
+        )
+        .ok()?;
+
+    Some(packet)
 }
 
 struct Driver {
@@ -640,9 +724,10 @@ enum InputCmd {
 
 struct ActiveSessionWorkers {
     input_tx: mpsc::Sender<InputCmd>,
-    frame_rx: mpsc::Receiver<Vec<u8>>,
+    frame_rx: mpsc::Receiver<(u64, Vec<u8>)>,
     running: Arc<AtomicBool>,
     force_frame: Arc<AtomicBool>,
+    last_seq: u64,
 }
 
 impl ActiveSessionWorkers {
@@ -655,7 +740,38 @@ impl ActiveSessionWorkers {
         let force_frame = Arc::new(AtomicBool::new(true));
 
         let (input_tx, input_rx) = mpsc::channel::<InputCmd>();
-        let (frame_tx, frame_rx) = mpsc::sync_channel::<Vec<u8>>(1);
+        let (frame_tx, frame_rx) = mpsc::sync_channel::<(u64, Vec<u8>)>(3);
+        let (raw_tx, raw_rx) = mpsc::sync_channel::<RawFrame>(ENCODER_THREADS);
+        let raw_rx = Arc::new(Mutex::new(raw_rx));
+        let (pool_tx, pool_rx) = mpsc::channel::<Vec<u8>>();
+
+        // Pool de codificadores JPEG em paralelo: enquanto um quadro é comprimido, o próximo já é capturado/comprimido
+        for _ in 0..ENCODER_THREADS {
+            let rx = raw_rx.clone();
+            let out = frame_tx.clone();
+            let recycle = pool_tx.clone();
+            let run = running.clone();
+            std::thread::spawn(move || {
+                while run.load(Ordering::Relaxed) {
+                    let received = {
+                        let guard = match rx.lock() {
+                            Ok(g) => g,
+                            Err(_) => return,
+                        };
+                        guard.recv_timeout(Duration::from_millis(100))
+                    };
+                    let frame = match received {
+                        Ok(f) => f,
+                        Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                    };
+                    if let Some(packet) = encode_packet(&frame) {
+                        let _ = out.try_send((frame.seq, packet));
+                    }
+                    let _ = recycle.send(frame.bgra);
+                }
+            });
+        }
 
         let mon_for_input = active_monitor.clone();
         let run_for_input = running.clone();
@@ -718,7 +834,8 @@ impl ActiveSessionWorkers {
             } else {
                 initial_monitors
             };
-            let target_interval = Duration::from_millis(30); // ~33 FPS
+            let target_interval = Duration::from_millis(CAPTURE_INTERVAL_MS);
+            let mut spare: Vec<u8> = Vec::new();
 
             while run_for_cap.load(Ordering::Relaxed) {
                 let started = Instant::now();
@@ -727,9 +844,15 @@ impl ActiveSessionWorkers {
                     monitors = win_platform::enumerate_monitors();
                 }
                 if let Some(mon) = monitors.get(idx).or_else(|| monitors.first()) {
+                    if spare.capacity() == 0 {
+                        if let Ok(recycled) = pool_rx.try_recv() {
+                            spare = recycled;
+                        }
+                    }
                     let force = force_for_cap.swap(false, Ordering::Relaxed);
-                    if let Some(packet) = capturer.capture_binary_packet(mon, force) {
-                        let _ = frame_tx.try_send(packet);
+                    if let Some(frame) = capturer.capture_raw(mon, force, &mut spare) {
+                        // Se todos os codificadores estão ocupados o quadro é descartado (backpressure)
+                        let _ = raw_tx.try_send(frame);
                     }
                 }
                 let elapsed = started.elapsed();
@@ -744,6 +867,7 @@ impl ActiveSessionWorkers {
             frame_rx,
             running,
             force_frame,
+            last_seq: 0,
         })
     }
 
@@ -928,6 +1052,13 @@ fn connection(url: &str, machine_uid: &str, hostname: &str) -> Result<(), Box<dy
                                 }
                             }
                         }
+                        "ping" if grant.allows(&session) => {
+                            socket.send(Message::Text(
+                                json!({"type": "pong", "sessionId": session, "ts": m["ts"]})
+                                    .to_string()
+                                    .into(),
+                            ))?;
+                        }
                         "select_monitor" if grant.allows(&session) => {
                             let monitor_id = m["monitorId"].as_u64().unwrap_or(0) as usize;
                             monitors = win_platform::enumerate_monitors();
@@ -994,11 +1125,20 @@ fn connection(url: &str, machine_uid: &str, hostname: &str) -> Result<(), Box<dy
             }
         }
 
-        // 3. Envia quadro binário pronto da thread de captura (zero lag)
+        // 3. Envia o quadro mais recente já codificado (descarta obsoletos e garante ordem crescente)
         if !grant.session.is_empty() {
-            if let Some(w) = workers.as_ref() {
-                if let Ok(packet) = w.frame_rx.try_recv() {
-                    let _ = socket.send(Message::Binary(packet.into()));
+            if let Some(w) = workers.as_mut() {
+                let mut latest: Option<(u64, Vec<u8>)> = None;
+                while let Ok(item) = w.frame_rx.try_recv() {
+                    if latest.as_ref().map_or(true, |(seq, _)| item.0 > *seq) {
+                        latest = Some(item);
+                    }
+                }
+                if let Some((seq, packet)) = latest {
+                    if seq > w.last_seq {
+                        w.last_seq = seq;
+                        let _ = socket.send(Message::Binary(packet.into()));
+                    }
                 }
             }
         } else {
@@ -1094,5 +1234,60 @@ mod tests {
     fn maps_coordinates_to_last_pixel() {
         assert_eq!(position(1.0, 1920), 1919);
         assert_eq!(position(0.0, 1920), 0);
+    }
+
+    /// Benchmark manual: `cargo test bench_capture_encode -- --ignored --nocapture`
+    /// Mede captura (quando há desktop interativo) e codificação JPEG (com imagem sintética se a captura não for possível).
+    #[test]
+    #[ignore]
+    fn bench_capture_encode() {
+        let monitors = win_platform::enumerate_monitors();
+        let mon = monitors.first().expect("sem monitor").clone();
+        let mut capturer = FrameCapturer::new();
+        let mut spare = Vec::new();
+        let (mut cap_ms, mut enc_ms, mut frames) = (0.0f64, 0.0f64, 0u32);
+        for _ in 0..40 {
+            let t = Instant::now();
+            let frame = match capturer.capture_raw(&mon, true, &mut spare) {
+                Some(f) => {
+                    cap_ms += t.elapsed().as_secs_f64() * 1000.0;
+                    f
+                }
+                None => {
+                    // Sem acesso ao desktop (sessão não interativa): imagem sintética com texto/ruído leve
+                    let (w, h) = (1920usize, 1080usize);
+                    let mut bgra = vec![0u8; w * h * 4];
+                    for (i, px) in bgra.chunks_exact_mut(4).enumerate() {
+                        let (x, y) = (i % w, i / w);
+                        let v = if (x / 6 + y / 11) % 3 == 0 { 20 } else { 235 };
+                        px[0] = v;
+                        px[1] = (x * 255 / w) as u8;
+                        px[2] = (y * 255 / h) as u8;
+                    }
+                    RawFrame {
+                        seq: 0,
+                        mon_id: 0,
+                        width: w as i32,
+                        height: h as i32,
+                        bgra,
+                    }
+                }
+            };
+            let t2 = Instant::now();
+            let packet = encode_packet(&frame).expect("encode");
+            enc_ms += t2.elapsed().as_secs_f64() * 1000.0;
+            frames += 1;
+            if frames == 1 {
+                println!("tamanho do pacote: {} KB", packet.len() / 1024);
+            }
+            spare = frame.bgra;
+        }
+        println!(
+            "{}x{} | captura média: {:.1} ms | codificação média: {:.1} ms",
+            mon.width,
+            mon.height,
+            cap_ms / frames as f64,
+            enc_ms / frames as f64
+        );
     }
 }

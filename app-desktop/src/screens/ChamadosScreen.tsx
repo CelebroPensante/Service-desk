@@ -7,7 +7,6 @@ import type {
   SetorResumo,
   Usuario,
 } from "../types";
-import AcessoRemoto from "../components/chamados/AcessoRemoto";
 import type { RemoteSession } from "../components/chamados/useRemoteAccess";
 import ChamadoDetail from "../components/chamados/ChamadoDetail";
 import ChamadoForm, {
@@ -338,26 +337,7 @@ function ChamadosScreen({ usuario, token, onSair }: ChamadosScreenProps) {
     }
   }
 
-  // Ponto 6: Suporte a abertura em Janela Separada (Pop-out Window)
-  const searchParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
-  if (searchParams?.get("popout_remoto") === "1") {
-    const popMachineUid = searchParams.get("machine_uid") || undefined;
-    const popHostname = searchParams.get("hostname") || undefined;
-    const popTicketId = Number(searchParams.get("ticket_id")) || 0;
-    const popChamado = popTicketId > 0 ? chamados.find((c) => c.id === popTicketId) : undefined;
-    return (
-      <AcessoRemoto
-        chamado={popChamado}
-        machineUid={popMachineUid}
-        hostname={popHostname}
-        token={token}
-        userId={usuario.id}
-        level={usuario.nivelAcesso}
-        isPopout
-        onClose={() => window.close()}
-      />
-    );
-  }
+
 
   // Exibe o banner de solicitação/notificação para o dono do chamado ou para qualquer usuário na estação alvo
   const sessoesParaNotificar = sessoesRemotasAtivas.filter((s) => {

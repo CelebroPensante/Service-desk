@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  ExternalLink,
+  Activity,
   Maximize2,
   Minimize2,
   Monitor,
   MousePointerClick,
   ShieldAlert,
+  Timer,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react'
@@ -222,22 +223,6 @@ export default function AcessoRemoto({
     }
   }
 
-  function openPopoutWindow() {
-    const url = new URL(window.location.href)
-    url.searchParams.set('popout_remoto', '1')
-    if (machineUid || session?.machineUid) {
-      url.searchParams.set('machine_uid', machineUid || session?.machineUid || '')
-      url.searchParams.set('hostname', hostname || session?.hostname || '')
-    } else if (chamado?.id) {
-      url.searchParams.set('ticket_id', String(chamado.id))
-    }
-    window.open(
-      url.toString(),
-      `remoto_${machineUid ?? chamado?.id ?? 'win'}`,
-      'width=1360,height=840,menubar=no,toolbar=no,location=no,status=no,resizable=yes',
-    )
-  }
-
   return (
     <section
       className={`${
@@ -285,17 +270,7 @@ export default function AcessoRemoto({
               Solicitar Acesso Remoto
             </button>
           )}
-          {session && !isPopout && (
-            <button
-              type="button"
-              className={btnClass}
-              onClick={openPopoutWindow}
-              title="Abrir o acesso remoto em uma janela independente"
-            >
-              <ExternalLink size={14} />
-              Janela Separada
-            </button>
-          )}
+          
           {session && (
             <button
               type="button"
@@ -416,6 +391,40 @@ export default function AcessoRemoto({
             )}
           </div>
 
+          {/* Métricas da transmissão: FPS e latência */}
+          <div
+            className="flex items-center gap-1.5"
+            title="FPS = quadros recebidos por segundo. Latência = tempo de ida e volta técnico ↔ servidor ↔ agente."
+          >
+            <span
+              className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-semibold tabular-nums ${
+                remote.stats.fps >= 20
+                  ? 'bg-emerald-500/20 text-emerald-300'
+                  : remote.stats.fps >= 10
+                    ? 'bg-amber-500/20 text-amber-300'
+                    : 'bg-red-500/20 text-red-300'
+              }`}
+            >
+              <Activity size={12} /> {remote.stats.fps} FPS
+            </span>
+            {!owner && (
+              <span
+                className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-semibold tabular-nums ${
+                  remote.stats.latency === null
+                    ? 'bg-slate-800 text-slate-400'
+                    : remote.stats.latency <= 60
+                      ? 'bg-emerald-500/20 text-emerald-300'
+                      : remote.stats.latency <= 150
+                        ? 'bg-amber-500/20 text-amber-300'
+                        : 'bg-red-500/20 text-red-300'
+                }`}
+              >
+                <Timer size={12} />{' '}
+                {remote.stats.latency === null ? '-- ms' : `${remote.stats.latency} ms`}
+              </span>
+            )}
+          </div>
+
           {/* Indicador de Foco Capturado */}
           {canControl && (
             <div className="flex items-center gap-2">
@@ -505,17 +514,6 @@ export default function AcessoRemoto({
               {isFullscreen ? 'Sair da Tela Cheia' : 'Tela Cheia'}
             </button>
 
-            {!isPopout && (
-              <button
-                type="button"
-                onClick={openPopoutWindow}
-                className="inline-flex items-center gap-1 rounded-md bg-slate-800 px-2.5 py-1 text-[11px] font-medium text-slate-200 hover:bg-slate-700"
-                title="Abrir em uma nova janela separada"
-              >
-                <ExternalLink size={12} />
-                Nova Janela
-              </button>
-            )}
           </div>
         </div>
 

@@ -58,6 +58,7 @@ interface WireMessage {
   monitors?: MonitorInfo[]
   activeMonitor?: number
   error?: string
+  ts?: number
 }
 
 export interface UseRemoteAccessOptions {
@@ -96,6 +97,8 @@ export function useRemoteAccess(
     monitorId: 0,
   })
   const prevBlobUrlRef = useRef<string | null>(null)
+  const pendingUrlRef = useRef<string | null>(null)
+  const renderingRef = useRef(false)
   const hasStreamRef = useRef(false)
 
   const ws = useRef<WebSocket | null>(null)
@@ -104,7 +107,11 @@ export function useRemoteAccess(
   const current = useRef<RemoteSession | null>(null)
   const candidates = useRef<RTCIceCandidateInit[]>([])
   const sharing = useRef(false)
-
+  const frameCount = useRef(0)
+  const [stats, setStats] = useState<{ fps: number; latency: number | null }>({
+    fps: 0,
+    latency: null,
+  })
   const headers = useCallback(
     () => ({ Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }),
     [token],
@@ -135,7 +142,14 @@ export function useRemoteAccess(
       URL.revokeObjectURL(prevBlobUrlRef.current)
       prevBlobUrlRef.current = null
     }
+    if (pendingUrlRef.current) {
+      URL.revokeObjectURL(pendingUrlRef.current)
+      pendingUrlRef.current = null
+    }
+    renderingRef.current = false
     if (frameImgRef.current) {
+      frameImgRef.current.onload = null
+      frameImgRef.current.onerror = null
       frameImgRef.current.removeAttribute('src')
     }
   }, [])
@@ -214,6 +228,32 @@ export function useRemoteAccess(
       }
     }
 
+    // Exibe o quadro e, enquanto ele decodifica, guarda apenas o mais recente (evita abortar a decodificação
+    // a cada novo `src`, o que travava a imagem quando os quadros chegavam mais rápido que a decodificação)
+    function showFrame(url: string) {
+      const img = frameImgRef.current
+      if (!img) {
+        URL.revokeObjectURL(url)
+        return
+      }
+      renderingRef.current = true
+      const finish = (counted: boolean) => {
+        if (counted) frameCount.current++
+        renderingRef.current = false
+        const next = pendingUrlRef.current
+        if (next && !disposed) {
+          pendingUrlRef.current = null
+          showFrame(next)
+        }
+      }
+      img.onload = () => finish(true)
+      img.onerror = () => finish(false)
+      const previous = prevBlobUrlRef.current
+      img.src = url
+      prevBlobUrlRef.current = url
+      if (previous) URL.revokeObjectURL(previous)
+    }
+
     function onBinaryFrame(buf: ArrayBuffer) {
       if (disposed || buf.byteLength <= 6) return
       const view = new DataView(buf)
@@ -224,13 +264,12 @@ export function useRemoteAccess(
 
       const blob = new Blob([new Uint8Array(buf, 6)], { type: 'image/jpeg' })
       const url = URL.createObjectURL(blob)
-      if (frameImgRef.current) {
-        frameImgRef.current.src = url
+      if (renderingRef.current) {
+        if (pendingUrlRef.current) URL.revokeObjectURL(pendingUrlRef.current)
+        pendingUrlRef.current = url
+      } else {
+        showFrame(url)
       }
-      if (prevBlobUrlRef.current) {
-        URL.revokeObjectURL(prevBlobUrlRef.current)
-      }
-      prevBlobUrlRef.current = url
 
       if (!hasStreamRef.current) {
         hasStreamRef.current = true
@@ -247,7 +286,14 @@ export function useRemoteAccess(
         return
       }
 
+      if (message.type === 'pong' && typeof message.ts === 'number') {
+        const rtt = Math.max(0, Math.round(performance.now() - message.ts))
+        setStats((s) => ({ ...s, latency: rtt }))
+        return
+      }
+
       if (message.type === 'frame' && message.frame) {
+        frameCount.current++
         frameMetaRef.current = {
           width: message.width || 1920,
           height: message.height || 1080,
@@ -370,6 +416,32 @@ export function useRemoteAccess(
       clearMedia()
     }
   }, [ticketId, machineUid, isDirectMachine, token, owner, headers, getPeer, send, end, clearMedia])
+
+  const hasSession = !!session
+
+  // Métricas da transmissão: FPS (quadros recebidos por segundo) e latência (RTT técnico → agente → técnico)
+  useEffect(() => {
+    if (!hasSession) {
+      frameCount.current = 0
+      setStats({ fps: 0, latency: null })
+      return
+    }
+    let last = performance.now()
+    const fpsTimer = setInterval(() => {
+      const now = performance.now()
+      const fps = Math.round((frameCount.current * 1000) / Math.max(1, now - last))
+      frameCount.current = 0
+      last = now
+      setStats((s) => (s.fps === fps ? s : { ...s, fps }))
+    }, 1000)
+    const pingTimer = setInterval(() => {
+      if (!owner) send({ type: 'ping', ts: Math.round(performance.now()) })
+    }, 1500)
+    return () => {
+      clearInterval(fpsTimer)
+      clearInterval(pingTimer)
+    }
+  }, [hasSession, owner, send])
 
   async function requestSession() {
     setError('')
@@ -501,6 +573,7 @@ export function useRemoteAccess(
     frameImgRef,
     frameMetaRef,
     history,
+    stats,
     send,
     end,
     share,

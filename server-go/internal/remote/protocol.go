@@ -116,6 +116,7 @@ type Message struct {
 	Hostname       string          `json:"hostname,omitempty"`
 	TechnicianName string          `json:"technicianName,omitempty"`
 	SessionID      string          `json:"sessionId,omitempty"`
+	Ts             int64           `json:"ts,omitempty"`
 	Session        *Session        `json:"session,omitempty"`
 	Input          *Input          `json:"input,omitempty"`
 	Monitors       []MonitorInfo   `json:"monitors,omitempty"`
