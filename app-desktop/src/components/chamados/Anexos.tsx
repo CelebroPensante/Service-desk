@@ -1,9 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Paperclip, Download, FileText, Loader2, Trash2  } from 'lucide-react'
-import { formatarDataUtc } from '../../utils/data'
+import { API_URL, formatarDataUtc } from '../../utils/data'
 import type { Anexo } from '../../types'
-
-const API_URL = 'http://localhost:8080'
 
 interface AnexosProps {
   idChamado: number

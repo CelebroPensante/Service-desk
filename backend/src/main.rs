@@ -7,13 +7,13 @@ mod models;
 
 use axum::{
     extract::DefaultBodyLimit,
-    http::{HeaderValue, Method},
+    http::Method,
     middleware::{from_fn, from_fn_with_state},
     routing::{delete, get, patch, post, put},
     Router,
 };
 use sqlx::PgPool;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 use auth::TokenManager;
@@ -56,11 +56,7 @@ async fn main() {
     };
 
     let cors = CorsLayer::new()
-        .allow_origin(
-            cfg.allowed_origin
-                .parse::<HeaderValue>()
-                .expect("ALLOWED_ORIGIN inválida"),
-        )
+        .allow_origin(AllowOrigin::mirror_request())
         .allow_methods([
             Method::GET,
             Method::POST,

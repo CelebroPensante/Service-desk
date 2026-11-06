@@ -2,6 +2,7 @@ import type { Chamado } from "../../types";
 import Comentarios from "./Comentarios";
 import Chat from "./Chat";
 import Anexos from "./Anexos";
+import AcessoRemoto from "./AcessoRemoto";
 import TelemetriaChamadoCard from "./TelemetriaChamadoCard";
 
 interface ChamadoDetailProps {
@@ -53,6 +54,7 @@ export default function ChamadoDetail({
   chamado,
   token,
   idUsuarioLogado,
+  nivelAcesso = 1,
   onBack,
   onEdit,
   onDelete,
@@ -133,6 +135,8 @@ export default function ChamadoDetail({
 
         {/* Painel de Relatório de Autoavaliação e Telemetria em Tempo Real */}
         <TelemetriaChamadoCard idChamado={chamado.id} />
+
+        <AcessoRemoto key={chamado.id} chamado={chamado} token={token} userId={idUsuarioLogado} level={nivelAcesso} />
 
         {/* Conteúdo em duas colunas */}
         <div className="mt-6 grid grid-cols-1 lg:grid-cols-5 gap-6">

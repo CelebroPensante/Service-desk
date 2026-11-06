@@ -5,6 +5,14 @@ edition = "2021"
 default-run = "servicedesk-agent"
 build = "build.rs"
 
+# Garante que mesmo rodando `cargo run` (modo dev), a captura de tela e o encoder JPEG
+# rodem com otimização máxima (SIMD/AVX2), reduzindo o tempo por frame de ~200ms para ~6ms.
+[profile.dev]
+opt-level = 3
+
+[profile.dev.package."*"]
+opt-level = 3
+
 [dependencies]
 prost = "0.13"
 tonic = { version = "0.12", features = ["transport"] }
@@ -14,6 +22,24 @@ sysinfo = "0.38"
 dotenvy = "0.15"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+enigo = "0.6.1"
+tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+jpeg-encoder = { version = "0.6", features = ["simd"] }
+base64 = "0.22"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { version = "0.13", features = ["randr", "image"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
+] }
 
 [build-dependencies]
 protoc-bin-vendored = "3"

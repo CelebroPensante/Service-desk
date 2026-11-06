@@ -3,6 +3,7 @@ pub mod telemetria {
 }
 
 mod collector;
+mod remote;
 
 use std::{
     sync::{Arc, Mutex},
@@ -217,6 +218,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         metadata.hostname,
         metadata.os_name,
         metadata.os_version
+    );
+
+    remote::start(
+        metadata.machine_uid.clone(),
+        metadata.hostname.clone(),
+        &server_go_url,
     );
 
     // 1. Inicia envio periódico de Heartbeat ao servidor Go

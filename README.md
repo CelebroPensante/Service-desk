@@ -116,3 +116,7 @@ npx tauri dev
 * **`main`**: Branch principal estável, protegida por Pull Requests.
 * **Branches de Funcionalidade**: Seguem o padrão `feature/<escopo>` ou `<modulo>` (ex.: `feature/contrato-proto-e-banco`, `feature/agente-telemetria-rust`, `feature/servidor-go-grpc`, `feature/painel-telemetria-front`).
 * **Commits**: Referenciam a User Story correspondente (`US-XX — Descrição da entrega`) ou seguem *Conventional Commits* (`feat:`, `fix:`, `chore:`, `docs:`).
+
+## Acesso remoto
+
+Implementação, configuração, diferenças em relação ao TCC e testes em [docs/ACESSO_REMOTO.md](docs/ACESSO_REMOTO.md).

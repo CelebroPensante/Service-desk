@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import type {
   CategoriaResumo,
   Chamado,
@@ -7,6 +7,7 @@ import type {
   SetorResumo,
   Usuario,
 } from "../types";
+import type { RemoteSession } from "../components/chamados/useRemoteAccess";
 import ChamadoDetail from "../components/chamados/ChamadoDetail";
 import ChamadoForm, {
   type ChamadoFormData,
@@ -86,6 +87,47 @@ function ChamadosScreen({ usuario, token, onSair }: ChamadosScreenProps) {
   const [autoavaliacao, setAutoavaliacao] = useState<MachineTelemetry | null>(null);
   const [gerandoAutoavaliacao, setGerandoAutoavaliacao] = useState(false);
   const [erroAutoavaliacao, setErroAutoavaliacao] = useState<string | null>(null);
+
+  // Ponto 1: Sessões remotas ativas para exibir notificação global na máquina acessada
+  const [sessoesRemotasAtivas, setSessoesRemotasAtivas] = useState<RemoteSession[]>([]);
+  const sessoesNotificadasRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    let ativo = true;
+    if ("Notification" in window && Notification.permission === "default") {
+      void Notification.requestPermission().catch(() => {});
+    }
+    async function verificarSessoesRemotas() {
+      try {
+        const res = await fetch(`${TELEMETRIA_API_URL}/api/remoto/ativas`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok && ativo) {
+          const data: { sessions: RemoteSession[] } = await res.json();
+          const lista = Array.isArray(data.sessions) ? data.sessions : [];
+          setSessoesRemotasAtivas(lista);
+          for (const s of lista) {
+            if (!sessoesNotificadasRef.current.has(s.id) && (s.ownerId === usuario.id || s.ticketId === 0)) {
+              sessoesNotificadasRef.current.add(s.id);
+              if (s.technicianId !== usuario.id && "Notification" in window && Notification.permission === "granted") {
+                new Notification("ServiceDesk — Solicitação de Acesso Remoto", {
+                  body: `O técnico ${s.technicianName} solicitou acesso remoto à estação ${s.hostname || s.machineUid || "atual"}.`,
+                });
+              }
+            }
+          }
+        }
+      } catch {
+        // Ignorado se servidor Go offline
+      }
+    }
+    void verificarSessoesRemotas();
+    const timer = setInterval(() => void verificarSessoesRemotas(), 2000);
+    return () => {
+      ativo = false;
+      clearInterval(timer);
+    };
+  }, [token, usuario.id]);
 
   // useCallback: a função só muda se o token mudar (o TecnicoPanel depende disso)
   const request = useCallback(
@@ -295,8 +337,57 @@ function ChamadosScreen({ usuario, token, onSair }: ChamadosScreenProps) {
     }
   }
 
+
+
+  // Exibe o banner de solicitação/notificação para o dono do chamado ou para qualquer usuário na estação alvo
+  const sessoesParaNotificar = sessoesRemotasAtivas.filter((s) => {
+    if (s.ticketId > 0) {
+      return s.ownerId === usuario.id;
+    }
+    if (s.machineUid) {
+      return s.technicianId !== usuario.id || modo !== "tecnico";
+    }
+    return false;
+  });
+
+  async function responderSolicitacaoRemota(sessao: RemoteSession, allow: boolean) {
+    const endpoint =
+      sessao.ticketId > 0
+        ? `${TELEMETRIA_API_URL}/api/remoto/chamados/${sessao.ticketId}/autorizar`
+        : `${TELEMETRIA_API_URL}/api/remoto/maquinas/${encodeURIComponent(sessao.machineUid!)}/autorizar`;
+
+    try {
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ allow }),
+      });
+      if (!allow) {
+        setSessoesRemotasAtivas((atual) => atual.filter((item) => item.id !== sessao.id));
+        return;
+      }
+      if (res.ok) {
+        const data: { session?: RemoteSession } = await res.json();
+        if (data.session) {
+          setSessoesRemotasAtivas((atual) =>
+            atual.map((item) => (item.id === sessao.id ? data.session! : item)),
+          );
+          if (sessao.ticketId > 0 && !data.session.agentStreaming && modo !== "detalhe") {
+            await abrirDetalhe(sessao.ticketId);
+          }
+        }
+      }
+    } catch {
+      // Ignorado
+    }
+  }
+
   // NOVO: toda tela passa a ser renderizada dentro da sidebar + topbar
   function comLayout(conteudo: ReactNode) {
+    const sessaoNotif = sessoesParaNotificar[0];
     return (
       <AppLayout
         usuario={usuario}
@@ -304,6 +395,58 @@ function ChamadosScreen({ usuario, token, onSair }: ChamadosScreenProps) {
         onNavegar={navegar}
         onSair={onSair}
       >
+        {sessaoNotif && (
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-950 shadow-sm">
+            <div className="flex items-center gap-2.5">
+              <span className="h-2.5 w-2.5 rounded-full bg-amber-600 animate-ping" />
+              <span className="font-semibold">
+                Notificação de Acesso Remoto
+                {sessaoNotif.hostname ? ` (${sessaoNotif.hostname})` : ""}: O técnico{" "}
+                <strong>{sessaoNotif.technicianName}</strong>{" "}
+                {sessaoNotif.sharing
+                  ? "está acessando esta máquina em tempo real."
+                  : "solicitou permissão para acessar esta estação."}
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {!sessaoNotif.sharing ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => void responderSolicitacaoRemota(sessaoNotif, true)}
+                    className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
+                  >
+                    Autorizar Acesso
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void responderSolicitacaoRemota(sessaoNotif, false)}
+                    className="rounded-lg border border-amber-400 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100"
+                  >
+                    Recusar
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void responderSolicitacaoRemota(sessaoNotif, false)}
+                  className="rounded-lg bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700"
+                >
+                  Encerrar Acesso Remoto
+                </button>
+              )}
+              {sessaoNotif.ticketId > 0 && (
+                <button
+                  type="button"
+                  onClick={() => void abrirDetalhe(sessaoNotif.ticketId)}
+                  className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700"
+                >
+                  Abrir Chamado #{sessaoNotif.ticketId}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
         {conteudo}
       </AppLayout>
     );
@@ -324,6 +467,9 @@ function ChamadosScreen({ usuario, token, onSair }: ChamadosScreenProps) {
         request={request}
         onRecarregar={carregarChamados}
         onDetalhe={(id) => void abrirDetalhe(id)}
+        token={token}
+        userId={usuario.id}
+        nivelAcesso={usuario.nivelAcesso}
       />,
     );
   }
