@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Headphones } from "lucide-react";
+import appLogo from "../../../src-tauri/icons/128x128.png";
 
 interface AuthStat {
   valor: string;
@@ -23,8 +23,15 @@ export default function AuthLayout({
     <div className="min-h-screen flex flex-row">
       <div className="flex flex-col justify-between p-12 bg-gradient-to-br from-blue-950 via-blue-800 to-sky-500 text-white basis-1/2 shrink-0">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-white/15 flex items-center justify-center">
+          {/* <div className="w-10 h-10 rounded-xl bg-white/15 flex items-center justify-center">
             <Headphones size={20} />
+          </div> */}
+          <div>
+            <img
+              src={appLogo}
+              alt="ServiceDesk Logo"
+              className="w-10 h-10 rounded-xl bg-white/15 object-contain"
+            />
           </div>
           <div>
             <p className="font-semibold leading-tight">ServiceDesk</p>
