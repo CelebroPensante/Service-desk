@@ -26,8 +26,21 @@ type peer struct {
 	code        string
 	machineUID  string
 	hostname    string
+	remoteIP    string
 	monitors    []MonitorInfo
 	pairExpires time.Time
+}
+
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+	if err != nil {
+		host = strings.TrimSpace(r.RemoteAddr)
+	}
+	ip := net.ParseIP(host)
+	if ip != nil && ip.IsLoopback() {
+		return "127.0.0.1"
+	}
+	return host
 }
 
 func (p *peer) send(m Message) error {
@@ -106,6 +119,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/remoto/maquinas/{uid}/ws", s.machineWS)
 	mux.HandleFunc("GET /api/remoto/chamados/{id}", s.ticketHTTP)
 	mux.HandleFunc("POST /api/remoto/chamados/{id}", s.ticketHTTP)
+	mux.HandleFunc("POST /api/remoto/chamados/{id}/autorizar", s.ticketAuthorizeHTTP)
 	mux.HandleFunc("GET /api/remoto/chamados/{id}/historico", s.historyHTTP)
 	mux.HandleFunc("GET /api/remoto/chamados/{id}/ws", s.ticketWS)
 	mux.HandleFunc("GET /api/remoto/agente/ws", s.agentWS)
@@ -248,10 +262,6 @@ func (s *Server) machineHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if agent == nil {
-		rejectMsg(w, 404, "O agente de acesso remoto desta estação não está conectado.")
-		return
-	}
 	if existing := s.machineSessions[uid]; existing != nil {
 		if existing.TechnicianID == u.ID {
 			respond(w, 200, map[string]any{"session": existing})
@@ -270,28 +280,28 @@ func (s *Server) machineHTTP(w http.ResponseWriter, r *http.Request) {
 		ID:             hex.EncodeToString(b),
 		TicketID:       0,
 		MachineUID:     uid,
-		Hostname:       agent.hostname,
 		OwnerID:        0,
 		TechnicianID:   u.ID,
 		TechnicianName: u.Name,
 		Sharing:        false,
 		Control:        false,
 		AgentStreaming: false,
-		Monitors:       agent.monitors,
 		ActiveMonitor:  0,
 		Expires:        time.Now().Add(2 * time.Minute),
-		agent:          agent,
-		agentPending:   true,
+	}
+	if agent != nil {
+		v.Hostname = agent.hostname
+		v.Monitors = agent.monitors
+		v.agent = agent
+		v.agentPending = true
+		agent.sessionID = v.ID
+		_ = agent.send(Message{Type: "prompt_consent", SessionID: v.ID, TechnicianName: u.Name})
 	}
 	if s.repo != nil && !s.record(v, u.ID, "requested") {
+		if agent != nil {
+			agent.sessionID = ""
+		}
 		reject(w, 503)
-		return
-	}
-	agent.sessionID = v.ID
-	// Solicita permissão ao usuário na máquina alvo (via diálogo nativo do Agente Rust e/ou banner no frontend)
-	if err := agent.send(Message{Type: "prompt_consent", SessionID: v.ID, TechnicianName: u.Name}); err != nil {
-		agent.sessionID = ""
-		rejectMsg(w, 503, "Agente desconectado")
 		return
 	}
 	s.machineSessions[uid] = v
@@ -327,26 +337,111 @@ func (s *Server) machineAuthorizeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v.Sharing = true
-	v.AgentStreaming = true
 	v.Expires = time.Now().Add(time.Hour)
 	_ = s.record(v, u.ID, "screen_allowed")
-	_ = s.record(v, u.ID, "control_allowed")
+	if v.agent == nil {
+		v.agent = s.findAgentForSessionLocked(v, clientIP(r))
+	}
 	if v.agent != nil {
+		v.AgentStreaming = true
+		v.Control = true
+		v.agentPending = true
+		v.agent.sessionID = v.ID
+		_ = s.record(v, u.ID, "control_allowed")
 		_ = v.agent.send(Message{Type: "grant", SessionID: v.ID, TechnicianName: v.TechnicianName})
 	}
 	s.broadcast(v)
 	respond(w, 200, map[string]any{"session": v})
 }
 
-func (s *Server) findAvailableAgentLocked(preferredUID string) *peer {
-	if preferredUID != "" {
-		if a := s.agentsByMachine[preferredUID]; a != nil && a.sessionID == "" {
+// Permite ao solicitante do chamado autorizar ou recusar a solicitação de acesso remoto diretamente pelo banner ou chamado.
+func (s *Server) ticketAuthorizeHTTP(w http.ResponseWriter, r *http.Request) {
+	u, _, id, status := s.identify(r, bearer(r))
+	if status != 0 {
+		reject(w, status)
+		return
+	}
+	var req struct {
+		Allow bool `json:"allow"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v := s.sessions[id]
+	if v == nil {
+		rejectMsg(w, 404, "Sessão não encontrada")
+		return
+	}
+	if !req.Allow {
+		if v.technician != nil {
+			v.technician.send(Message{Type: "error", Error: "O usuário recusou a solicitação de acesso remoto."})
+		}
+		s.end(v, u.ID)
+		respond(w, 200, map[string]any{"ok": true})
+		return
+	}
+	if !v.Sharing {
+		if !s.record(v, u.ID, "screen_allowed") {
+			s.end(v, u.ID)
+			reject(w, 503)
+			return
+		}
+		v.Sharing = true
+		v.Expires = time.Now().Add(time.Hour)
+	}
+	if a := s.findAgentForSessionLocked(v, clientIP(r)); a != nil {
+		_ = s.record(v, u.ID, "control_allowed")
+		if err := s.attachAgentLocked(v, a); err == nil {
+			v.AgentStreaming = true
+			v.Control = true
+		}
+	}
+	s.broadcast(v)
+	respond(w, 200, map[string]any{"session": v})
+}
+
+func (s *Server) findAgentForSessionLocked(v *Session, ownerIP string) *peer {
+	if v.agent != nil {
+		return v.agent
+	}
+	if v.MachineUID != "" {
+		if a := s.agentsByMachine[v.MachineUID]; a != nil && (a.sessionID == "" || a.sessionID == v.ID) {
 			return a
 		}
 	}
-	for _, a := range s.agentsByMachine {
-		if a.sessionID == "" {
-			return a
+	if ownerIP == "" && v.owner != nil {
+		ownerIP = v.owner.remoteIP
+	}
+	techIP := ""
+	if v.technician != nil {
+		techIP = v.technician.remoteIP
+	}
+	// Prioriza agente conectado a partir do mesmo IP da máquina do usuário solicitante
+	if ownerIP != "" {
+		for _, a := range s.agentsByMachine {
+			if (a.sessionID == "" || a.sessionID == v.ID) && a.remoteIP == ownerIP {
+				return a
+			}
+		}
+		for _, a := range s.agents {
+			if (a.sessionID == "" || a.sessionID == v.ID) && a.remoteIP == ownerIP {
+				return a
+			}
+		}
+	}
+	// Se o usuário e o técnico estão em IPs diferentes, NUNCA seleciona o agente da máquina do técnico
+	if ownerIP != "" && techIP != "" && ownerIP != techIP {
+		return nil
+	}
+	if len(s.agentsByMachine) == 1 {
+		for _, a := range s.agentsByMachine {
+			if a.sessionID == "" || a.sessionID == v.ID {
+				if techIP != "" && ownerIP != "" && ownerIP != techIP && a.remoteIP == techIP {
+					return nil
+				}
+				return a
+			}
 		}
 	}
 	return nil
@@ -358,9 +453,15 @@ func (s *Server) attachAgentLocked(v *Session, a *peer) error {
 	}
 	v.agent = a
 	v.agentPending = true
-	v.MachineUID = a.machineUID
-	v.Hostname = a.hostname
-	v.Monitors = a.monitors
+	if a.machineUID != "" {
+		v.MachineUID = a.machineUID
+	}
+	if a.hostname != "" {
+		v.Hostname = a.hostname
+	}
+	if len(a.monitors) > 0 {
+		v.Monitors = a.monitors
+	}
 	a.sessionID = v.ID
 	if err := a.send(Message{Type: "grant", SessionID: v.ID, TechnicianName: v.TechnicianName}); err != nil {
 		s.revoke(v)
@@ -407,12 +508,26 @@ func (s *Server) ticketHTTP(w http.ResponseWriter, r *http.Request) {
 	v := &Session{
 		ID:             hex.EncodeToString(b),
 		TicketID:       id,
+		MachineUID:     ticket.MachineUID,
 		OwnerID:        ticket.OwnerID,
 		TechnicianID:   u.ID,
 		TechnicianName: u.Name,
 		Expires:        time.Now().Add(2 * time.Minute),
 	}
+	if v.MachineUID != "" {
+		if agent := s.agentsByMachine[v.MachineUID]; agent != nil && agent.sessionID == "" {
+			v.Hostname = agent.hostname
+			v.Monitors = agent.monitors
+			v.agent = agent
+			v.agentPending = true
+			agent.sessionID = v.ID
+			_ = agent.send(Message{Type: "prompt_consent", SessionID: v.ID, TechnicianName: u.Name})
+		}
+	}
 	if !s.record(v, u.ID, "requested") {
+		if v.agent != nil {
+			v.agent.sessionID = ""
+		}
 		reject(w, 503)
 		return
 	}
@@ -467,7 +582,7 @@ func (s *Server) upgrade(w http.ResponseWriter, r *http.Request) (*peer, error) 
 	}
 	c.SetReadLimit(4 * 1024 * 1024)
 	c.SetReadDeadline(time.Now().Add(10 * time.Second))
-	return &peer{conn: c}, nil
+	return &peer{conn: c, remoteIP: clientIP(r)}, nil
 }
 
 func (s *Server) machineWS(w http.ResponseWriter, r *http.Request) {
@@ -722,12 +837,12 @@ func (s *Server) apply(v *Session, p *peer, m Message) error {
 		}
 		v.Sharing = true
 		v.Expires = time.Now().Add(time.Hour)
-		// Unifica permissão de tela + teclado/mouse automaticamente quando há um agente da estação conectado
-		if v.agent == nil {
-			if a := s.findAvailableAgentLocked(m.MachineUID); a != nil {
-				_ = s.record(v, p.user.ID, "control_allowed")
-				_ = s.attachAgentLocked(v, a)
+		// Unifica permissão de tela + teclado/mouse automaticamente quando há um agente da estação do usuário conectado
+		if a := s.findAgentForSessionLocked(v, p.remoteIP); a != nil {
+			_ = s.record(v, p.user.ID, "control_allowed")
+			if err := s.attachAgentLocked(v, a); err == nil {
 				v.AgentStreaming = true
+				v.Control = true
 			}
 		}
 	case "select_monitor":
@@ -768,10 +883,11 @@ func (s *Server) apply(v *Session, p *peer, m Message) error {
 			s.end(v, p.user.ID)
 			return denied
 		}
-		if a := s.findAvailableAgentLocked(v.MachineUID); a != nil {
+		if a := s.findAgentForSessionLocked(v, ""); a != nil {
 			_ = s.record(v, p.user.ID, "control_allowed")
 			if err := s.attachAgentLocked(v, a); err == nil {
 				v.AgentStreaming = true
+				v.Control = true
 				s.broadcast(v)
 				return nil
 			}
@@ -789,7 +905,7 @@ func (s *Server) apply(v *Session, p *peer, m Message) error {
 			}
 			delete(s.agents, m.PairCode)
 		} else {
-			a = s.findAvailableAgentLocked(v.MachineUID)
+			a = s.findAgentForSessionLocked(v, p.remoteIP)
 			if a == nil {
 				return errors.New("Agente não encontrado")
 			}

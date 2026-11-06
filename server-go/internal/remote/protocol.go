@@ -18,8 +18,9 @@ type User struct {
 }
 
 type Ticket struct {
-	OwnerID int
-	Closed  bool
+	OwnerID    int
+	Closed     bool
+	MachineUID string
 }
 
 type Event struct {

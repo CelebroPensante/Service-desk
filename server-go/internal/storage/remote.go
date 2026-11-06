@@ -7,7 +7,16 @@ import (
 
 func (s *PostgresStore) Ticket(ctx context.Context, id int) (remote.Ticket, error) {
 	var t remote.Ticket
-	err := s.pool.QueryRow(ctx, "SELECT ch.id_usuario, ch.data_resolucao IS NOT NULL OR lower(st.status) IN ('resolvido','fechado','finalizado','cancelado') FROM chamado ch JOIN status_chamado st ON st.id=ch.id_status WHERE ch.id=$1", id).Scan(&t.OwnerID, &t.Closed)
+	err := s.pool.QueryRow(
+		ctx,
+		`SELECT ch.id_usuario,
+		        ch.data_resolucao IS NOT NULL OR lower(st.status) IN ('resolvido','fechado','finalizado','cancelado'),
+		        COALESCE((SELECT ra.machine_uid FROM relatorio_autoavaliacao ra WHERE ra.id_chamado = ch.id ORDER BY ra.coletado_em DESC LIMIT 1), '')
+		 FROM chamado ch
+		 JOIN status_chamado st ON st.id = ch.id_status
+		 WHERE ch.id = $1`,
+		id,
+	).Scan(&t.OwnerID, &t.Closed, &t.MachineUID)
 	return t, err
 }
 func (s *PostgresStore) Record(ctx context.Context, e remote.Event) error {

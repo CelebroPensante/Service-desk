@@ -802,6 +802,9 @@ fn connection(url: &str, machine_uid: &str, hostname: &str) -> Result<(), Box<dy
     loop {
         // 1. Verifica se o usuário respondeu à caixa de diálogo nativa de permissão
         while let Ok((session_id, tech_name, accepted)) = consent_rx.try_recv() {
+            if grant.allows(&session_id) {
+                continue;
+            }
             if accepted {
                 monitors = win_platform::enumerate_monitors();
                 match ActiveSessionWorkers::start(monitors.clone()) {
@@ -881,6 +884,19 @@ fn connection(url: &str, machine_uid: &str, hostname: &str) -> Result<(), Box<dy
                             });
                         }
                         "grant" if !session.is_empty() => {
+                            if grant.allows(&session) && workers.is_some() {
+                                socket.send(Message::Text(
+                                    json!({
+                                        "type": "ready",
+                                        "sessionId": session,
+                                        "monitors": monitors,
+                                        "activeMonitor": 0,
+                                    })
+                                    .to_string()
+                                    .into(),
+                                ))?;
+                                continue;
+                            }
                             let tech_name = m["technicianName"].as_str().unwrap_or("Técnico");
                             monitors = win_platform::enumerate_monitors();
                             match ActiveSessionWorkers::start(monitors.clone()) {

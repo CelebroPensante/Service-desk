@@ -354,14 +354,22 @@ export default function AcessoRemoto({
               <p className="text-xs font-medium">
                 O técnico <strong>{session.technicianName}</strong> solicitou acesso remoto. Ao autorizar, a visualização da tela e o controle de mouse/teclado serão habilitados automaticamente.
               </p>
-              <button
-                type="button"
-                className={btnPrimaryClass}
-                disabled={!remote.connected}
-                onClick={() => void remote.share()}
-              >
-                Autorizar Acesso Remoto
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-emerald-700"
+                  onClick={() => void remote.share()}
+                >
+                  Autorizar Acesso Remoto
+                </button>
+                <button
+                  type="button"
+                  className={btnClass}
+                  onClick={() => void remote.denySession()}
+                >
+                  Recusar
+                </button>
+              </div>
             </div>
           )}
         </div>

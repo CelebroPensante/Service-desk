@@ -403,14 +403,61 @@ export function useRemoteAccess(
     send({ type: 'select_monitor', monitorId })
   }
 
+  async function denySession() {
+    setError('')
+    try {
+      const targetUrl = isDirectMachine
+        ? `${TELEMETRIA_API_URL}/api/remoto/maquinas/${encodeURIComponent(machineUid!)}/autorizar`
+        : `${TELEMETRIA_API_URL}/api/remoto/chamados/${ticketId}/autorizar`
+      await fetch(targetUrl, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({ allow: false }),
+      })
+    } catch {
+      // Ignorado
+    } finally {
+      end()
+    }
+  }
+
   async function share() {
-    if (sharing.current || !connected) return
+    if (sharing.current) return
     sharing.current = true
     setError('')
     try {
-      if (!send({ type: 'share', machineUid: machineUid || '' })) {
-        throw new Error('Conexão encerrada')
+      const targetUrl = isDirectMachine
+        ? `${TELEMETRIA_API_URL}/api/remoto/maquinas/${encodeURIComponent(machineUid!)}/autorizar`
+        : `${TELEMETRIA_API_URL}/api/remoto/chamados/${ticketId}/autorizar`
+
+      let agentStreamingActive = false
+      try {
+        const res = await fetch(targetUrl, {
+          method: 'POST',
+          headers: headers(),
+          body: JSON.stringify({ allow: true }),
+        })
+        if (res.ok) {
+          const data: { session?: RemoteSession } = await res.json()
+          if (data.session) {
+            current.current = data.session
+            setSession(data.session)
+            agentStreamingActive = !!data.session.agentStreaming
+          }
+        }
+      } catch {
+        // Fallback via WebSocket abaixo
       }
+
+      if (!agentStreamingActive && connected) {
+        send({ type: 'share', machineUid: machineUid || '' })
+      }
+
+      // Se o Agente Rust já assumiu o streaming de tela + mouse/teclado da estação, não abre popup extra do navegador
+      if (agentStreamingActive) {
+        return
+      }
+
       if (navigator.mediaDevices?.getDisplayMedia) {
         try {
           const stream = await navigator.mediaDevices.getDisplayMedia({
@@ -457,6 +504,7 @@ export function useRemoteAccess(
     send,
     end,
     share,
+    denySession,
     requestSession,
     selectMonitor,
   }
