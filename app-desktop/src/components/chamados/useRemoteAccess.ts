@@ -230,15 +230,23 @@ export function useRemoteAccess(
 
     // Exibe o quadro e, enquanto ele decodifica, guarda apenas o mais recente (evita abortar a decodificação
     // a cada novo `src`, o que travava a imagem quando os quadros chegavam mais rápido que a decodificação)
+    // Confirma ao agente cada quadro exibido ou descartado: ele só envia novos quadros com poucos pendentes,
+    // o que impede o vídeo de se acumular na rede e manter a latência alta
+    function ackFrame() {
+      if (!owner) send({ type: 'frame_ack' })
+    }
+
     function showFrame(url: string) {
       const img = frameImgRef.current
       if (!img) {
         URL.revokeObjectURL(url)
+        ackFrame()
         return
       }
       renderingRef.current = true
       const finish = (counted: boolean) => {
         if (counted) frameCount.current++
+        ackFrame()
         renderingRef.current = false
         const next = pendingUrlRef.current
         if (next && !disposed) {
@@ -265,7 +273,10 @@ export function useRemoteAccess(
       const blob = new Blob([new Uint8Array(buf, 6)], { type: 'image/jpeg' })
       const url = URL.createObjectURL(blob)
       if (renderingRef.current) {
-        if (pendingUrlRef.current) URL.revokeObjectURL(pendingUrlRef.current)
+        if (pendingUrlRef.current) {
+          URL.revokeObjectURL(pendingUrlRef.current)
+          ackFrame()
+        }
         pendingUrlRef.current = url
       } else {
         showFrame(url)
