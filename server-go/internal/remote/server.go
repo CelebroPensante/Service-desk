@@ -29,6 +29,10 @@ type peer struct {
 	remoteIP    string
 	monitors    []MonitorInfo
 	pairExpires time.Time
+	frameOnce   sync.Once
+	frames      chan []byte
+	done        chan struct{}
+	closeOnce   sync.Once
 }
 
 func clientIP(r *http.Request) string {
@@ -57,7 +61,47 @@ func (p *peer) sendBinary(raw []byte) error {
 	return p.conn.WriteMessage(websocket.BinaryMessage, raw)
 }
 
-func (p *peer) close() { p.conn.Close() }
+// sendFrame entrega um quadro de vídeo sem bloquear a leitura do agente. Se o destinatário ainda
+// estiver transmitindo quadros anteriores, descarta o mais antigo da fila e mantém os mais novos.
+func (p *peer) sendFrame(raw []byte) {
+	p.frameOnce.Do(func() {
+		p.frames = make(chan []byte, 2)
+		go p.writeFrames()
+	})
+	for {
+		select {
+		case p.frames <- raw:
+			return
+		default:
+		}
+		select {
+		case <-p.frames:
+		default:
+		}
+	}
+}
+
+func (p *peer) writeFrames() {
+	for {
+		select {
+		case raw := <-p.frames:
+			if p.sendBinary(raw) != nil {
+				return
+			}
+		case <-p.done:
+			return
+		}
+	}
+}
+
+func (p *peer) close() {
+	p.closeOnce.Do(func() {
+		if p.done != nil {
+			close(p.done)
+		}
+	})
+	p.conn.Close()
+}
 
 type Server struct {
 	mu              sync.Mutex
@@ -582,7 +626,7 @@ func (s *Server) upgrade(w http.ResponseWriter, r *http.Request) (*peer, error) 
 	}
 	c.SetReadLimit(4 * 1024 * 1024)
 	c.SetReadDeadline(time.Now().Add(10 * time.Second))
-	return &peer{conn: c, remoteIP: clientIP(r)}, nil
+	return &peer{conn: c, remoteIP: clientIP(r), done: make(chan struct{})}, nil
 }
 
 func (s *Server) machineWS(w http.ResponseWriter, r *http.Request) {
@@ -635,6 +679,15 @@ func (s *Server) machineWS(w http.ResponseWriter, r *http.Request) {
 			s.mu.Unlock()
 			if agent == nil || agent.send(Message{Type: "ping", SessionID: v.ID, Ts: m.Ts}) != nil {
 				p.send(Message{Type: "pong", Ts: m.Ts})
+			}
+			return
+		}
+		if m.Type == "frame_ack" {
+			s.mu.Lock()
+			agent := v.agent
+			s.mu.Unlock()
+			if agent != nil {
+				_ = agent.send(Message{Type: "frame_ack", SessionID: v.ID})
 			}
 			return
 		}
@@ -719,6 +772,16 @@ func (s *Server) ticketWS(w http.ResponseWriter, r *http.Request) {
 			s.mu.Unlock()
 			if !tech || agent == nil || agent.send(Message{Type: "ping", SessionID: v.ID, Ts: m.Ts}) != nil {
 				p.send(Message{Type: "pong", Ts: m.Ts})
+			}
+			return
+		}
+		if m.Type == "frame_ack" {
+			s.mu.Lock()
+			agent := v.agent
+			tech := p == v.technician
+			s.mu.Unlock()
+			if tech && agent != nil {
+				_ = agent.send(Message{Type: "frame_ack", SessionID: v.ID})
 			}
 			return
 		}
@@ -1151,10 +1214,10 @@ func (s *Server) agentWS(w http.ResponseWriter, r *http.Request) {
 		}
 		s.mu.Unlock()
 		if tech != nil {
-			_ = tech.sendBinary(raw)
+			tech.sendFrame(raw)
 		}
 		if owner != nil {
-			_ = owner.sendBinary(raw)
+			owner.sendFrame(raw)
 		}
 	})
 }

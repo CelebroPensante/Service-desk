@@ -21,6 +21,13 @@ use tungstenite::{stream::MaybeTlsStream, Message};
 const CAPTURE_INTERVAL_MS: u64 = 25;
 /// Quantidade de threads de codificação JPEG paralelas.
 const ENCODER_THREADS: usize = 2;
+/// Qualidade JPEG. Com subamostragem 4:2:0 o quadro fica ~30% menor e codifica ~40% mais rápido que 84/4:4:4.
+const JPEG_QUALITY: u8 = 80;
+/// Quadros enviados e ainda não confirmados (`frame_ack`) pelo técnico. Evita acumular vídeo nos buffers
+/// de rede, o que fazia a latência crescer sem limite em telas complexas.
+const MAX_FRAMES_IN_FLIGHT: u32 = 2;
+/// Sem confirmação nesse intervalo, os quadros pendentes são considerados perdidos e o envio é retomado.
+const FRAME_ACK_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MonitorInfo {
@@ -578,8 +585,8 @@ fn encode_packet(frame: &RawFrame) -> Option<Vec<u8>> {
     packet.extend_from_slice(&(frame.width as u16).to_be_bytes());
     packet.extend_from_slice(&(frame.height as u16).to_be_bytes());
 
-    let mut encoder = Encoder::new(&mut packet, 84);
-    encoder.set_sampling_factor(SamplingFactor::R_4_4_4);
+    let mut encoder = Encoder::new(&mut packet, JPEG_QUALITY);
+    encoder.set_sampling_factor(SamplingFactor::R_4_2_0);
     encoder
         .encode(
             &frame.bgra,
@@ -728,6 +735,39 @@ struct ActiveSessionWorkers {
     running: Arc<AtomicBool>,
     force_frame: Arc<AtomicBool>,
     last_seq: u64,
+    /// Quadro mais recente já codificado, aguardando espaço na janela de envio.
+    pending: Option<(u64, Vec<u8>)>,
+    in_flight: u32,
+    last_ack: Instant,
+}
+
+impl ActiveSessionWorkers {
+    fn ack_frame(&mut self) {
+        self.in_flight = self.in_flight.saturating_sub(1);
+        self.last_ack = Instant::now();
+    }
+
+    /// Guarda só o quadro mais novo e o entrega quando o técnico tiver confirmado os anteriores.
+    fn next_frame(&mut self) -> Option<Vec<u8>> {
+        while let Ok(item) = self.frame_rx.try_recv() {
+            if item.0 > self.last_seq && self.pending.as_ref().map_or(true, |(seq, _)| item.0 > *seq) {
+                self.pending = Some(item);
+            }
+        }
+        if self.in_flight >= MAX_FRAMES_IN_FLIGHT {
+            if self.last_ack.elapsed() < FRAME_ACK_TIMEOUT {
+                return None;
+            }
+            self.in_flight = 0;
+        }
+        let (seq, packet) = self.pending.take()?;
+        self.last_seq = seq;
+        if self.in_flight == 0 {
+            self.last_ack = Instant::now();
+        }
+        self.in_flight += 1;
+        Some(packet)
+    }
 }
 
 impl ActiveSessionWorkers {
@@ -868,6 +908,9 @@ impl ActiveSessionWorkers {
             running,
             force_frame,
             last_seq: 0,
+            pending: None,
+            in_flight: 0,
+            last_ack: Instant::now(),
         })
     }
 
@@ -1059,6 +1102,11 @@ fn connection(url: &str, machine_uid: &str, hostname: &str) -> Result<(), Box<dy
                                     .into(),
                             ))?;
                         }
+                        "frame_ack" if grant.allows(&session) => {
+                            if let Some(w) = workers.as_mut() {
+                                w.ack_frame();
+                            }
+                        }
                         "select_monitor" if grant.allows(&session) => {
                             let monitor_id = m["monitorId"].as_u64().unwrap_or(0) as usize;
                             monitors = win_platform::enumerate_monitors();
@@ -1125,20 +1173,11 @@ fn connection(url: &str, machine_uid: &str, hostname: &str) -> Result<(), Box<dy
             }
         }
 
-        // 3. Envia o quadro mais recente já codificado (descarta obsoletos e garante ordem crescente)
+        // 3. Envia o quadro mais recente já codificado (descarta obsoletos e respeita a janela de confirmações)
         if !grant.session.is_empty() {
             if let Some(w) = workers.as_mut() {
-                let mut latest: Option<(u64, Vec<u8>)> = None;
-                while let Ok(item) = w.frame_rx.try_recv() {
-                    if latest.as_ref().map_or(true, |(seq, _)| item.0 > *seq) {
-                        latest = Some(item);
-                    }
-                }
-                if let Some((seq, packet)) = latest {
-                    if seq > w.last_seq {
-                        w.last_seq = seq;
-                        let _ = socket.send(Message::Binary(packet.into()));
-                    }
+                if let Some(packet) = w.next_frame() {
+                    let _ = socket.send(Message::Binary(packet.into()));
                 }
             }
         } else {
