@@ -28,6 +28,8 @@ pub struct AppState {
     pub db: PgPool,
     pub token_manager: TokenManager,
     pub chat_rooms: Arc<Mutex<HashMap<i32, broadcast::Sender<String>>>>,
+    /// Criação/alteração/exclusão de chamados, transmitida por SSE em /api/chamados/eventos.
+    pub eventos_chamados: broadcast::Sender<handlers::eventos::EventoChamado>,
     pub config: Config,
 }
 
@@ -52,6 +54,7 @@ async fn main() {
         db: pool,
         token_manager: TokenManager::new(cfg.jwt_secret.clone(), cfg.access_token_ttl),
         chat_rooms: Arc::new(Mutex::new(HashMap::new())),
+        eventos_chamados: broadcast::channel(handlers::eventos::CAPACIDADE_EVENTOS).0,
         config: cfg.clone(),
     };
 
@@ -130,7 +133,9 @@ async fn main() {
         // Fora do middleware acima DE PROPÓSITO: o handshake de WebSocket não
         // permite header Authorization; o token é validado manualmente dentro
         // do próprio handler chat_ws.
-        .route("/:id/chat/ws", get(handlers::chat::chat_ws));
+        .route("/:id/chat/ws", get(handlers::chat::chat_ws))
+        // SSE também fica fora: o EventSource não envia header Authorization.
+        .route("/eventos", get(handlers::eventos::stream_eventos));
 
         // Triagem por árvore de decisão (US-20): exige usuário autenticado; cada
         // triagem só é acessível pelo próprio dono.

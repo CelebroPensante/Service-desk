@@ -8,6 +8,7 @@ import type {
   Usuario,
 } from "../types";
 import type { RemoteSession } from "../components/chamados/useRemoteAccess";
+import { useEventosChamados } from "../components/chamados/useEventosChamados";
 import ChamadoDetail from "../components/chamados/ChamadoDetail";
 import ChamadoForm, {
   type ChamadoFormData,
@@ -194,6 +195,30 @@ function ChamadosScreen({ usuario, token, onSair }: ChamadosScreenProps) {
   useEffect(() => {
     void carregarDados();
   }, []);
+
+  // Atualização em tempo real (SSE): chamados criados, alterados ou excluídos por
+  // outros usuários aparecem sem precisar relogar. Rajadas de eventos viram uma recarga só.
+  const recargaPendente = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (recargaPendente.current != null) window.clearTimeout(recargaPendente.current);
+  }, []);
+  useEventosChamados(token, (evento) => {
+    if (recargaPendente.current != null) window.clearTimeout(recargaPendente.current);
+    recargaPendente.current = window.setTimeout(() => {
+      recargaPendente.current = null;
+      carregarChamados().catch((e) => console.error("Falha ao recarregar chamados:", e));
+    }, 300);
+
+    if (modo !== "detalhe" || !selecionado) return;
+    if (evento.tipo === "excluido" && evento.idChamado === selecionado.id) {
+      setSelecionado(null);
+      setModo("lista");
+    } else if (evento.tipo === "resync" || evento.idChamado === selecionado.id) {
+      request<Chamado>(`/api/chamados/${selecionado.id}`)
+        .then(setSelecionado)
+        .catch((e) => console.error("Falha ao recarregar o chamado aberto:", e));
+    }
+  });
 
   async function gerarAutoavaliacao() {
     setGerandoAutoavaliacao(true);

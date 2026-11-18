@@ -9,6 +9,7 @@ use sqlx::Row;
 
 use crate::{
     auth::Claims,
+    handlers::eventos,
     models::{
         AtribuirAtendenteInput, AtualizarChamadoInput, AtualizarStatusChamadoInput,
         CategoriaResumo, Chamado, ErroResposta, NovoChamadoInput, PrioridadeResumo,
@@ -255,7 +256,10 @@ pub async fn criar_chamado(
     };
 
     match buscar_chamado(&state, id).await {
-        Ok(Some(chamado)) => (StatusCode::CREATED, Json(chamado)).into_response(),
+        Ok(Some(chamado)) => {
+            eventos::publicar(&state, "criado", chamado.id, chamado.id_usuario);
+            (StatusCode::CREATED, Json(chamado)).into_response()
+        }
 
         Ok(None) => erro(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -513,7 +517,10 @@ pub async fn atualizar_chamado(
     }
 
     match buscar_chamado(&state, id).await {
-        Ok(Some(chamado)) => (StatusCode::OK, Json(chamado)).into_response(),
+        Ok(Some(chamado)) => {
+            eventos::publicar(&state, "atualizado", chamado.id, chamado.id_usuario);
+            (StatusCode::OK, Json(chamado)).into_response()
+        }
 
         Ok(None) => erro(StatusCode::NOT_FOUND, "chamado não encontrado"),
 
@@ -562,13 +569,16 @@ pub async fn deletar_chamado(
         .await;
 
     match resultado {
-        Ok(resultado) if resultado.rows_affected() > 0 => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "mensagem": "Chamado removido com sucesso"
-            })),
-        )
-            .into_response(),
+        Ok(resultado) if resultado.rows_affected() > 0 => {
+            eventos::publicar(&state, "excluido", chamado.id, chamado.id_usuario);
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "mensagem": "Chamado removido com sucesso"
+                })),
+            )
+                .into_response()
+        }
 
         Ok(_) => erro(StatusCode::NOT_FOUND, "chamado não encontrado"),
 
@@ -812,7 +822,10 @@ pub async fn atualizar_status(
     }
 
     match buscar_chamado(&state, id).await {
-        Ok(Some(chamado)) => (StatusCode::OK, Json(chamado)).into_response(),
+        Ok(Some(chamado)) => {
+            eventos::publicar(&state, "atualizado", chamado.id, chamado.id_usuario);
+            (StatusCode::OK, Json(chamado)).into_response()
+        }
         Ok(None) => erro(StatusCode::NOT_FOUND, "chamado não encontrado"),
         Err(e) => {
             tracing::error!("erro ao carregar chamado atualizado: {e}");
@@ -857,7 +870,10 @@ pub async fn atualizar_atendente(
     }
 
     match buscar_chamado(&state, id).await {
-        Ok(Some(chamado)) => (StatusCode::OK, Json(chamado)).into_response(),
+        Ok(Some(chamado)) => {
+            eventos::publicar(&state, "atualizado", chamado.id, chamado.id_usuario);
+            (StatusCode::OK, Json(chamado)).into_response()
+        }
         Ok(None) => erro(StatusCode::NOT_FOUND, "chamado não encontrado"),
         Err(e) => {
             tracing::error!("erro ao carregar chamado atualizado: {e}");
