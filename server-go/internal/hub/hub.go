@@ -59,7 +59,9 @@ type TelemetryHub struct {
 	machines    map[string]*MachineTelemetryDTO
 	rawProtos   map[string]*pb.TelemetriaSnapshot
 	subscribers map[string]map[chan MachineTelemetryDTO]struct{}
-	store       PersistenceStore
+	// IP de origem da conexão gRPC de cada agente, para identificar a estação do solicitante.
+	machineIPs map[string]string
+	store      PersistenceStore
 }
 
 func New(store PersistenceStore) *TelemetryHub {
@@ -67,8 +69,42 @@ func New(store PersistenceStore) *TelemetryHub {
 		machines:    make(map[string]*MachineTelemetryDTO),
 		rawProtos:   make(map[string]*pb.TelemetriaSnapshot),
 		subscribers: make(map[string]map[chan MachineTelemetryDTO]struct{}),
+		machineIPs:  make(map[string]string),
 		store:       store,
 	}
+}
+
+// SetMachineIP registra o IP (já normalizado) de onde o agente está conectado.
+func (h *TelemetryHub) SetMachineIP(machineUID, ip string) {
+	if machineUID == "" || ip == "" {
+		return
+	}
+	h.mu.Lock()
+	h.machineIPs[machineUID] = ip
+	h.mu.Unlock()
+}
+
+// GetMachineByIP retorna a estação cujo agente está conectado a partir do IP informado,
+// preferindo uma online. Usado para "a máquina atual" de quem faz a requisição.
+func (h *TelemetryHub) GetMachineByIP(ip string) (MachineTelemetryDTO, bool) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	var fallback *MachineTelemetryDTO
+	for uid, machineIP := range h.machineIPs {
+		m, ok := h.machines[uid]
+		if !ok || machineIP != ip {
+			continue
+		}
+		if m.StatusConexao == "online" {
+			return *m, true
+		}
+		fallback = m
+	}
+	if fallback != nil {
+		return *fallback, true
+	}
+	return MachineTelemetryDTO{}, false
 }
 
 func FromProtoSnapshot(snap *pb.TelemetriaSnapshot) MachineTelemetryDTO {

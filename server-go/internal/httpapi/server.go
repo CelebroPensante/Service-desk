@@ -9,6 +9,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"servicedesk/server-go/internal/hub"
+	"servicedesk/server-go/internal/netutil"
 	"servicedesk/server-go/internal/storage"
 )
 
@@ -87,19 +88,43 @@ func (s *Server) handleObterMaquina(w http.ResponseWriter, r *http.Request) {
 	if uid == "atual" || uid == "default" {
 		uid = ""
 	}
-	m, ok := s.hub.GetMachine(uid)
+	m, ok := s.machineFor(r, uid)
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{
-			"erro": "Nenhuma estação monitorada ativa encontrada",
-		})
+		writeJSON(w, http.StatusNotFound, map[string]string{"erro": erroMaquina(uid)})
 		return
 	}
 	writeJSON(w, http.StatusOK, m)
 }
 
+// machineFor resolve a estação alvo: a indicada por machineUID ou, se vazio, a de quem
+// faz a requisição (agente conectado do mesmo IP). Nunca devolve outra estação qualquer,
+// senão o diagnóstico de um PC mostraria os dados de outro.
+func (s *Server) machineFor(r *http.Request, machineUID string) (hub.MachineTelemetryDTO, bool) {
+	if machineUID != "" {
+		return s.hub.GetMachine(machineUID)
+	}
+	return s.hub.GetMachineByIP(netutil.HostIP(r.RemoteAddr))
+}
+
+func erroMaquina(machineUID string) string {
+	if machineUID != "" {
+		return "Estação monitorada não encontrada"
+	}
+	return "Nenhum Agente ServiceDesk conectado a partir desta estação. Verifique se o agente está em execução neste computador."
+}
+
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	uid := r.PathValue("machine_uid")
-	if uid == "" || uid == "atual" || uid == "todas" {
+	if uid == "atual" {
+		// Acompanha apenas a estação de quem conecta, nunca o fluxo de todas as máquinas.
+		m, ok := s.machineFor(r, "")
+		if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]string{"erro": erroMaquina("")})
+			return
+		}
+		uid = m.MachineUID
+	}
+	if uid == "" || uid == "todas" {
 		uid = "*"
 	}
 
@@ -159,11 +184,9 @@ func (s *Server) handleCriarAutoavaliacaoAvulsa(w http.ResponseWriter, r *http.R
 	var body criarRelatorioBody
 	_ = json.NewDecoder(r.Body).Decode(&body)
 
-	snap, ok := s.hub.GetMachine(body.MachineUID)
+	snap, ok := s.machineFor(r, body.MachineUID)
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{
-			"erro": "Agente de telemetria não encontrado para capturar a autoavaliação da máquina",
-		})
+		writeJSON(w, http.StatusNotFound, map[string]string{"erro": erroMaquina(body.MachineUID)})
 		return
 	}
 
@@ -192,11 +215,9 @@ func (s *Server) handleCriarRelatorioChamado(w http.ResponseWriter, r *http.Requ
 	if body.Snapshot != nil && body.Snapshot.MachineUID != "" {
 		snap = *body.Snapshot
 	} else {
-		found, ok := s.hub.GetMachine(body.MachineUID)
+		found, ok := s.machineFor(r, body.MachineUID)
 		if !ok {
-			writeJSON(w, http.StatusNotFound, map[string]string{
-				"erro": "Agente de telemetria não encontrado para capturar o relatório da máquina",
-			})
+			writeJSON(w, http.StatusNotFound, map[string]string{"erro": erroMaquina(body.MachineUID)})
 			return
 		}
 		snap = found

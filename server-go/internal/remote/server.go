@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"servicedesk/server-go/internal/netutil"
 )
 
 type peer struct {
@@ -36,15 +38,7 @@ type peer struct {
 }
 
 func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
-	if err != nil {
-		host = strings.TrimSpace(r.RemoteAddr)
-	}
-	ip := net.ParseIP(host)
-	if ip != nil && ip.IsLoopback() {
-		return "127.0.0.1"
-	}
-	return host
+	return netutil.HostIP(r.RemoteAddr)
 }
 
 func (p *peer) send(m Message) error {

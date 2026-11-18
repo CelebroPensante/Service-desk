@@ -99,3 +99,45 @@ func TestHttpEndpointsAndWebSocket(t *testing.T) {
 		t.Fatalf("esperava CPU atualizada 64.2, obteve %.2f", updated.CpuUsagePercent)
 	}
 }
+
+// Com dois agentes conectados, "máquina atual" deve ser a do IP de quem pede,
+// nunca a de outra estação (antes devolvia uma máquina online qualquer).
+func TestMaquinaAtualPorIPDoSolicitante(t *testing.T) {
+	h := hub.New(nil)
+	for _, uid := range []string{"pc-principal", "pc-secundario"} {
+		h.UpdateSnapshot(context.Background(), &pb.TelemetriaSnapshot{MachineUid: uid, Hostname: uid})
+	}
+	h.SetMachineIP("pc-principal", "127.0.0.1")
+	h.SetMachineIP("pc-secundario", "10.0.0.5")
+	handler := NewServer(h, nil, "*").Handler()
+
+	casos := []struct {
+		remoteAddr string
+		status     int
+		uid        string
+	}{
+		{"10.0.0.5:51000", http.StatusOK, "pc-secundario"},
+		{"127.0.0.1:51001", http.StatusOK, "pc-principal"},
+		{"10.0.0.9:51002", http.StatusNotFound, ""},
+	}
+	for _, c := range casos {
+		for _, req := range []*http.Request{
+			httptest.NewRequest(http.MethodGet, "/api/telemetria/maquinas/atual", nil),
+			httptest.NewRequest(http.MethodPost, "/api/telemetria/autoavaliacao", strings.NewReader(`{}`)),
+		} {
+			req.RemoteAddr = c.remoteAddr
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != c.status && !(req.Method == http.MethodPost && c.status == http.StatusOK && rec.Code == http.StatusCreated) {
+				t.Fatalf("%s %s de %s: status %d, esperado %d", req.Method, req.URL.Path, c.remoteAddr, rec.Code, c.status)
+			}
+			if c.uid == "" {
+				continue
+			}
+			var m hub.MachineTelemetryDTO
+			if err := json.NewDecoder(rec.Body).Decode(&m); err != nil || m.MachineUID != c.uid {
+				t.Fatalf("%s %s de %s: máquina %q, esperada %q (err=%v)", req.Method, req.URL.Path, c.remoteAddr, m.MachineUID, c.uid, err)
+			}
+		}
+	}
+}

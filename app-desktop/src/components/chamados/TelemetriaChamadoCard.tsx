@@ -129,7 +129,7 @@ export default function TelemetriaChamadoCard({ idChamado }: TelemetriaChamadoCa
       const wsPath =
         machineUidAlvo && machineUidAlvo !== "atual"
           ? `${WS_BASE_URL}/api/telemetria/maquinas/${encodeURIComponent(machineUidAlvo)}/ws`
-          : `${WS_BASE_URL}/api/telemetria/ws`;
+          : `${WS_BASE_URL}/api/telemetria/maquinas/atual/ws`;
 
       ws = new WebSocket(wsPath);
       ws.onopen = () => {

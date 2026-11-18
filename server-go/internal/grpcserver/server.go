@@ -7,11 +7,20 @@ import (
 	"time"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
 	"servicedesk/server-go/internal/hub"
+	"servicedesk/server-go/internal/netutil"
 	"servicedesk/server-go/internal/pb"
 )
+
+// recordPeerIP associa a máquina ao IP de origem da conexão gRPC do agente.
+func (s *TelemetryGrpcServer) recordPeerIP(ctx context.Context, machineUID string) {
+	if p, ok := peer.FromContext(ctx); ok && p.Addr != nil {
+		s.hub.SetMachineIP(machineUID, netutil.HostIP(p.Addr.String()))
+	}
+}
 
 type TelemetryGrpcServer struct {
 	pb.UnimplementedTelemetriaServiceServer
@@ -42,6 +51,7 @@ func (s *TelemetryGrpcServer) EnviarHeartbeat(
 	}
 
 	s.hub.RecordHeartbeat(ctx, req.GetMachineUid(), req.GetHostname(), req.GetUsuarioSo())
+	s.recordPeerIP(ctx, req.GetMachineUid())
 
 	return &pb.HeartbeatResponse{
 		Ok:                    true,
@@ -77,6 +87,7 @@ func (s *TelemetryGrpcServer) StreamTelemetria(
 			machineUID = snapshot.GetMachineUid()
 			log.Printf("[gRPC] Novo stream de telemetria iniciado: machine_uid=%s hostname=%s SO=%s",
 				machineUID, snapshot.GetHostname(), snapshot.GetOsName())
+			s.recordPeerIP(stream.Context(), machineUID)
 		}
 
 		framesCount++
