@@ -322,6 +322,19 @@ function ChamadosScreen({ usuario, token, onSair }: ChamadosScreenProps) {
     }
   }
 
+  // Busca o id do status "Fechado" na API em vez de fixá-lo no código.
+  async function fecharChamado(chamado: Chamado) {
+    const status = await request<{ id: number; status: string }[]>("/api/chamados/status");
+    const fechado = status.find((s) => s.status.trim().toLowerCase() === "fechado");
+    if (!fechado) throw new Error('Status "Fechado" não está cadastrado.');
+    const atualizado = await request<Chamado>(`/api/chamados/${chamado.id}/status`, {
+      method: "PUT",
+      body: JSON.stringify({ idStatus: fechado.id }),
+    });
+    setSelecionado(atualizado);
+    await carregarChamados();
+  }
+
   async function excluirChamado(chamado: Chamado) {
     if (!window.confirm(`Deseja excluir o chamado "${chamado.titulo}"?`)) return;
     setErro(null);
@@ -598,6 +611,7 @@ function ChamadosScreen({ usuario, token, onSair }: ChamadosScreenProps) {
         onBack={() => setModo("lista")}
         onEdit={abrirEdicao}
         onDelete={(chamado) => void excluirChamado(chamado)}
+        onFechar={fecharChamado}
       />,
     );
   }

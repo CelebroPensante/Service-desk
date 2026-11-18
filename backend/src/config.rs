@@ -32,7 +32,15 @@ impl Config {
                     .to_string()
             }),
             jwt_secret,
-            access_token_ttl: Duration::from_secs(15 * 60),
+            // Validade do token de login em minutos (padrão: 8 horas, uma jornada de trabalho).
+            access_token_ttl: Duration::from_secs(
+                env::var("ACCESS_TOKEN_TTL_MIN")
+                    .ok()
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .filter(|&m| m > 0)
+                    .unwrap_or(8 * 60)
+                    * 60,
+            ),
             allowed_origin: env::var("ALLOWED_ORIGIN")
                 .unwrap_or_else(|_| "http://localhost:5173".to_string()),
             max_anexo_mb: env::var("MAX_ANEXO_MB")

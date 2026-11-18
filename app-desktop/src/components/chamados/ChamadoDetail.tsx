@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { Chamado } from "../../types";
 import Comentarios from "./Comentarios";
 import Chat from "./Chat";
@@ -13,6 +14,7 @@ interface ChamadoDetailProps {
   onBack: () => void;
   onEdit: (chamado: Chamado) => void;
   onDelete: (chamado: Chamado) => void;
+  onFechar?: (chamado: Chamado) => Promise<void>;
 }
 
 // Cores dos badges (ajuste as chaves conforme os valores reais do seu backend)
@@ -58,8 +60,29 @@ export default function ChamadoDetail({
   onBack,
   onEdit,
   onDelete,
+  onFechar,
 }: ChamadoDetailProps) {
   const codigo = `CHM-${String(chamado.id).padStart(4, "0")}`;
+  const [fechando, setFechando] = useState(false);
+  const [erroFechar, setErroFechar] = useState<string | null>(null);
+
+  // Técnicos (nível >= 2) podem fechar chamados ainda não fechados.
+  const podeFechar =
+    !!onFechar && nivelAcesso >= 2 && chamado.status?.trim().toLowerCase() !== "fechado";
+
+  async function fechar() {
+    if (!onFechar) return;
+    if (!window.confirm(`Deseja fechar o chamado "${chamado.titulo}"?`)) return;
+    setErroFechar(null);
+    setFechando(true);
+    try {
+      await onFechar(chamado);
+    } catch (e) {
+      setErroFechar(e instanceof Error ? e.message : "Não foi possível fechar o chamado.");
+    } finally {
+      setFechando(false);
+    }
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 px-8 py-6">
@@ -117,6 +140,15 @@ export default function ChamadoDetail({
             </div>
 
             <div className="flex gap-2 shrink-0">
+              {podeFechar && (
+                <button
+                  onClick={() => void fechar()}
+                  disabled={fechando}
+                  className="bg-emerald-600 text-white text-sm font-medium rounded-lg px-4 py-2 hover:bg-emerald-700 disabled:opacity-60"
+                >
+                  {fechando ? "Fechando..." : "Fechar chamado"}
+                </button>
+              )}
               <button
                 onClick={() => onEdit(chamado)}
                 className="border border-slate-300 bg-white text-slate-800 text-sm font-medium rounded-lg px-4 py-2 hover:bg-slate-50"
@@ -131,6 +163,11 @@ export default function ChamadoDetail({
               </button>
             </div>
           </div>
+          {erroFechar && (
+            <p role="alert" className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+              {erroFechar}
+            </p>
+          )}
         </div>
 
         {/* Painel de Relatório de Autoavaliação e Telemetria em Tempo Real */}

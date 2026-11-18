@@ -723,12 +723,34 @@ pub async fn listar_tecnicos(
         return erro(StatusCode::FORBIDDEN, "você não tem permissão para listar técnicos");
     }
 
+    // Usuários promovidos a nível técnico depois da migration 003 (cadastro ou troca
+    // de cargo) ainda não têm registro de atendente e não poderiam receber chamados.
+    if let Err(e) = sqlx::query(
+        r#"
+        INSERT INTO atendente (id_usuario)
+        SELECT u.id
+        FROM usuario u
+        JOIN cargo c ON c.id = u.id_cargo
+        JOIN nivel_permissao np ON np.id = c.id_permissao
+        WHERE u.ativo = TRUE AND np.nivel >= 2
+        ON CONFLICT (id_usuario) DO NOTHING
+        "#,
+    )
+    .execute(&state.db)
+    .await
+    {
+        tracing::error!("erro ao sincronizar atendentes: {e}");
+        return erro(StatusCode::INTERNAL_SERVER_ERROR, "erro ao listar técnicos");
+    }
+
     let resultado = sqlx::query(
         r#"
         SELECT a.id, u.nome, a.id_setor
         FROM atendente a
         JOIN usuario u ON u.id = a.id_usuario
-        WHERE a.ativo = TRUE AND u.ativo = TRUE
+        JOIN cargo c ON c.id = u.id_cargo
+        JOIN nivel_permissao np ON np.id = c.id_permissao
+        WHERE a.ativo = TRUE AND u.ativo = TRUE AND np.nivel >= 2
         ORDER BY u.nome
         "#,
     )
