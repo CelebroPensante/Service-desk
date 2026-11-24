@@ -58,6 +58,40 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 ## Como Executar o Projeto
 
+### Execução Rápida via Scripts Entrypoint (Recomendado)
+
+Para facilitar a inicialização e orquestração dos serviços, utilize os scripts automatizados na raiz do repositório:
+
+#### 1. Lado do Host (Servidor Central Completo)
+Inicializa a infraestrutura central: verificação do PostgreSQL, compilação e execução da API Rust (`:8080`), Servidor Coordenador Go (`:8081` / `:50051`) e Frontend Web (`:5173`):
+```powershell
+.\run-host.ps1
+
+# Parâmetros adicionais:
+.\run-host.ps1 -BackendOnly       # Apenas API Rust e Servidor Go (sem interface gráfica)
+.\run-host.ps1 -Desktop           # Abre o App Desktop (Tauri) em vez do navegador web
+.\run-host.ps1 -ApplyMigrations   # Aplica migrations SQL pendentes antes de iniciar
+.\run-host.ps1 -Stop              # Encerra todos os serviços do Host em execução
+```
+
+#### 2. Lado do Cliente (Agente Local + App Desktop)
+Inicializa os componentes da estação do solicitante/técnico: Agente de Monitoramento Local em Rust (`:3000`) e a aplicação cliente Desktop via Tauri:
+```powershell
+# Execução padrão conectando ao host local ou configurado:
+.\run-client.ps1
+
+# Conectando a um servidor Host específico na rede:
+.\run-client.ps1 -ServerHost 10.100.0.52
+
+# Parâmetros adicionais:
+.\run-client.ps1 -Web             # Roda a interface no navegador (modo Web Vite)
+.\run-client.ps1 -Stop            # Encerra os componentes do Cliente em execução
+```
+
+---
+
+### Execução Manual por Módulo (Passo a Passo)
+
 ### 1. Banco de Dados (PostgreSQL)
 
 Crie o banco de dados `servicedesk` e aplique as migrations localizadas em `backend/migrations/`:
