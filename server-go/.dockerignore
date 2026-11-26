@@ -1,0 +1,6 @@
+bin/
+.env
+.env.local
+*.log
+.git/
+.vscode/

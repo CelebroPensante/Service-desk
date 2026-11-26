@@ -1,0 +1,120 @@
+version: '3.8'
+
+# ==============================================================================
+# ServiceDesk - Stack On-Premise Docker Compose (Servidor Central)
+# ==============================================================================
+# Inicia todos os serviços necessários para a infraestrutura do ServiceDesk:
+#   1. Banco de Dados PostgreSQL 18
+#   2. Migrator automático de banco de dados
+#   3. Backend Principal em Rust/Axum (porta 8080)
+#   4. Servidor de Telemetria e Conexão Remota em Go (portas 8081 e 50051)
+# ==============================================================================
+
+services:
+  # --- 1. Banco de Dados PostgreSQL ---
+  postgres:
+    image: postgres:18-alpine
+    container_name: servicedesk-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-servicedesk}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-servicedesk_secret_2026}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-servicedesk}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - servicedesk-network
+
+  # --- 2. Aplicação Automática de Migrations ---
+  migrations:
+    image: postgres:18-alpine
+    container_name: servicedesk-migrations
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: 5432
+      PGUSER: ${POSTGRES_USER:-postgres}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-servicedesk_secret_2026}
+      PGDATABASE: ${POSTGRES_DB:-servicedesk}
+    volumes:
+      - ./backend/migrations:/migrations:ro
+      - ./deploy/docker/apply-migrations.sh:/apply-migrations.sh:ro
+    entrypoint: ["/bin/sh", "/apply-migrations.sh"]
+    networks:
+      - servicedesk-network
+
+  # --- 3. Backend Principal (Rust / Axum) ---
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: celepropensante/servicedesk-backend:${VERSION:-latest}
+    container_name: servicedesk-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+    environment:
+      PORT: 8080
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-servicedesk_secret_2026}@postgres:5432/${POSTGRES_DB:-servicedesk}?sslmode=disable
+      JWT_SECRET: ${JWT_SECRET:-7b6d05c497fdcc72ed0ddf4796568e50379b8e7fe64ddaebb8dfb26f184eb850}
+      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-*}
+      ACCESS_TOKEN_TTL_MIN: ${ACCESS_TOKEN_TTL_MIN:-480}
+    ports:
+      - "8080:8080"
+    volumes:
+      - uploads_data:/app/uploads
+    networks:
+      - servicedesk-network
+
+  # --- 4. Servidor de Telemetria e Acesso Remoto (Go) ---
+  server-go:
+    build:
+      context: ./server-go
+      dockerfile: Dockerfile
+    image: celepropensante/servicedesk-server-go:${VERSION:-latest}
+    container_name: servicedesk-server-go
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    environment:
+      HTTP_PORT: 8081
+      GRPC_PORT: 50051
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-servicedesk_secret_2026}@postgres:5432/${POSTGRES_DB:-servicedesk}?sslmode=disable
+      API_BASE_URL: http://backend:8080
+      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-*}
+      HEARTBEAT_TIMEOUT_SECS: 12
+    ports:
+      - "8081:8081"
+      - "50051:50051"
+    networks:
+      - servicedesk-network
+
+# --- Volumes Persistentes On-Premise ---
+volumes:
+  postgres_data:
+    name: servicedesk_postgres_data
+  uploads_data:
+    name: servicedesk_uploads_data
+
+# --- Rede Interna Isolada ---
+networks:
+  servicedesk-network:
+    name: servicedesk_network
+    driver: bridge
