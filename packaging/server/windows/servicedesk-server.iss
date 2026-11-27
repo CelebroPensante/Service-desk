@@ -42,10 +42,11 @@ Source: "servicedesk-ctl.ps1"; DestDir: "{app}\bin"; Flags: ignoreversion
 Source: "{#MigrationSourceDir}\*.sql"; DestDir: "{app}\migrations"; Flags: ignoreversion recursesubdirs
 
 [Dirs]
-Name: "{app}\config"
-Name: "{app}\logs"
-Name: "{app}\run"
-Name: "{app}\uploads"
+Name: "{app}\config"; Permissions: users-modify
+Name: "{app}\logs"; Permissions: users-modify
+Name: "{app}\run"; Permissions: users-modify
+Name: "{app}\uploads"; Permissions: users-modify
+Name: "{app}\bin"; Permissions: users-modify
 
 [Icons]
 Name: "{autoprograms}\ServiceDesk Server\Terminal de Controle e Logs"; Filename: "{app}\bin\servicedesk-ctl.cmd"; Parameters: "console"; WorkingDir: "{app}\bin"
@@ -86,7 +87,7 @@ begin
   DbConfigPage.Values[1] := ExpandConstant('{param:DBPORT|5432}');
   DbConfigPage.Values[2] := ExpandConstant('{param:DBNAME|servicedesk}');
   DbConfigPage.Values[3] := ExpandConstant('{param:DBUSER|postgres}');
-  DbConfigPage.Values[4] := ExpandConstant('{param:DBPASSWORD|postgres}');
+  DbConfigPage.Values[4] := ExpandConstant('{param:DBPASSWORD|luis2005}');
 
   // Página 2: Portas e Segurança da API
   PortConfigPage := CreateInputQueryPage(DbConfigPage.ID,
@@ -142,16 +143,10 @@ begin
 
     SaveStringToFile(ExpandConstant('{app}\bin\.env'), BackendEnvContent, False);
     SaveStringToFile(ExpandConstant('{app}\config\backend.env'), BackendEnvContent, False);
-
-    // Cria arquivo server-go/.env em {app}\bin\server-go.env e {app}\config\server-go.env
-    GoEnvContent := 'HTTP_PORT=' + TelemetryPort + #13#10 +
-                    'GRPC_PORT=' + GrpcPort + #13#10 +
-                    'DATABASE_URL=' + DbUrl + #13#10 +
-                    'API_BASE_URL=http://127.0.0.1:' + ApiPort + #13#10 +
-                    'HEARTBEAT_TIMEOUT_SECS=12' + #13#10 +
-                    'ALLOWED_ORIGIN=*' + #13#10;
-
     SaveStringToFile(ExpandConstant('{app}\config\server-go.env'), GoEnvContent, False);
+
+    // Concede permissões para Usuários locais (*S-1-5-32-545) poderem gerar logs e gerenciar serviços sem erro de Acesso Negado
+    Exec('icacls.exe', '"' + ExpandConstant('{app}') + '" /grant *S-1-5-32-545:(OI)(CI)M /T /C /Q', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 
     // Se a tarefa de rodar migrations foi marcada, executa via servicedesk-ctl
     if WizardIsTaskSelected('runmigrations') then
